@@ -1772,3 +1772,49 @@ button.avatar:active {
   flex-direction: column;
   gap: 2px;
 }
+.money-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+}
+.money-wrap .input--money {
+  width: 100%;
+}
+.input--expr {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+.money-wrap__hint {
+  position: absolute;
+  right: 10px;
+  bottom: -14px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--c-pink-ink);
+  white-space: nowrap;
+}
+button.hero-stat {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.balance__net {
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+.balance__net.is-pos {
+  color: var(--c-mint-ink);
+}
+.balance__net.is-neg {
+  color: var(--c-pink-ink);
+}
+.line--btn {
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { Person } from '../lib/types'
+import { evalMoney, looksLikeExpression } from '../lib/expr'
 
 export function Mascot({ size = 120, mood = 'happy', className = '' }: { size?: number; mood?: 'happy' | 'sleepy' | 'wow' | 'sad'; className?: string }) {
   // 반반이: a half-pink, half-mint rice ball friend.
@@ -121,6 +122,7 @@ export function EmojiPicker({ value, options, onChange }: { value: string; optio
   )
 }
 
+/** 金額欄，順便是小算盤：打 120+80、300/2、(300+50)/2，離開欄位或按 Enter 就算好。 */
 export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, className = '' }: { value: number; onChange: (n: number) => void; placeholder?: string; autoFocus?: boolean; className?: string }) {
   const [text, setText] = useState(value ? String(value) : '')
   const last = useRef(value)
@@ -130,23 +132,44 @@ export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, clas
       setText(value ? String(value) : '')
     }
   }, [value])
+  const commit = (t: string) => {
+    if (!looksLikeExpression(t)) return
+    const v = evalMoney(t)
+    if (v == null) return
+    last.current = v
+    setText(v ? String(v) : '')
+    onChange(v)
+  }
+  const isExpr = looksLikeExpression(text)
+  const preview = isExpr ? evalMoney(text) : null
   return (
-    <input
-      className={`input input--money ${className}`}
-      inputMode="decimal"
-      placeholder={placeholder}
-      autoFocus={autoFocus}
-      value={text}
-      onChange={(e) => {
-        const t = e.target.value.replace(/[^\d.\-]/g, '')
-        setText(t)
-        const n = parseFloat(t)
-        const v = Number.isFinite(n) ? n : 0
-        last.current = v
-        onChange(v)
-      }}
-      onFocus={(e) => e.target.select()}
-    />
+    <span className={`money-wrap ${/\bgrow\b/.test(className) ? 'grow' : ''}`}>
+      <input
+        className={`input input--money ${className.replace(/\bgrow\b/, '')} ${isExpr ? 'input--expr' : ''}`}
+        inputMode="decimal"
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        value={text}
+        onChange={(e) => {
+          const t = e.target.value.replace(/[^\d.\-+*/()×÷xX,\s]/g, '')
+          setText(t)
+          if (looksLikeExpression(t)) return // wait for blur / Enter
+          const n = parseFloat(t.replace(/,/g, ''))
+          const v = Number.isFinite(n) ? n : 0
+          last.current = v
+          onChange(v)
+        }}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === '=') {
+            e.preventDefault()
+            commit((e.target as HTMLInputElement).value)
+          }
+        }}
+        onFocus={(e) => e.target.select()}
+      />
+      {isExpr && <span className="money-wrap__hint">{preview != null ? `= ${preview}` : '…'}</span>}
+    </span>
   )
 }
 

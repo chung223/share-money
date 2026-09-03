@@ -6,6 +6,7 @@ import { Empty, Mascot, Sheet } from '../components/ui'
 import type { Project } from '../lib/types'
 import type { Group } from '../lib/types'
 import { CATEGORIES, categoryOf, modeLabel, type Category } from '../lib/category'
+import BalancesSheet from '../components/BalancesSheet'
 
 // zustand selectors must return a stable reference, or React re-renders forever
 const NO_GROUPS: Group[] = []
@@ -78,6 +79,7 @@ export default function Home() {
   const groups = useStore((s) => s.data.groups ?? NO_GROUPS)
   const [pick, setPick] = useState(false)
   const [filter, setFilter] = useState<Category | 'all'>('all')
+  const [balances, setBalances] = useState(false)
   const create = (groupId?: string, category?: Category) => {
     setPick(false)
     const p = addProject(groupId, category)
@@ -110,13 +112,13 @@ export default function Home() {
       </header>
 
       {projects.length > 0 && (
-        <div className="hero-stat card card--pink">
+        <button type="button" className="hero-stat card card--pink" onClick={() => setBalances(true)}>
           <div>
-            <div className="hero-stat__label">還沒收回來的錢</div>
+            <div className="hero-stat__label">還沒收回來的錢 · 點我看誰欠多少</div>
             <div className="hero-stat__value">{fmtMoney(totalOwed, base)}</div>
           </div>
           <div className="hero-stat__emoji">{totalOwed > 0 ? '🥺' : '🎉'}</div>
-        </div>
+        </button>
       )}
 
       <main className="stack">
@@ -153,6 +155,7 @@ export default function Home() {
         </button>
       )}
 
+      <BalancesSheet open={balances} onClose={() => setBalances(false)} />
       <Sheet open={pick} onClose={() => setPick(false)} title="開新帳本">
         <div className="stack">
           <div className="label">這次是什麼？</div>
