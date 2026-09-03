@@ -5,7 +5,7 @@ import { categoryOf } from '../lib/category'
 import type { Project } from '../lib/types'
 import { Avatar, Confetti, Mascot } from '../components/ui'
 import QrCode from '../components/QrCode'
-import { QUICK_PAY, twqrTransfer } from '../lib/twqr'
+import { buildAppUrl, isSafeAppUrl, QUICK_PAY, twqrTransfer } from '../lib/twqr'
 
 type Status = { kind: 'loading' } | { kind: 'error'; title: string; hint: string; mood: 'sad' | 'sleepy' } | { kind: 'ok'; snap: ShareSnapshot; paid: string[] }
 
@@ -271,24 +271,31 @@ export default function SharePage() {
                                   💚 用 LINE Pay / 街口 轉帳
                                 </a>
                               )}
-                              {(pay!.quickPay ?? ['linepay', 'jkopay']).length > 0 && (
-                                <div className="quickpay">
-                                  {QUICK_PAY.filter((q) => (pay!.quickPay ?? ['linepay', 'jkopay']).includes(q.id)).map((q) => (
-                                    <button
-                                      key={q.id}
-                                      type="button"
-                                      className="btn btn--ghost btn--sm"
-                                      onClick={() => {
-                                        navigator.clipboard?.writeText(String(t.remaining)).catch(() => {})
-                                        flash(`已複製 ${fmtMoney(t.remaining, t.dueCurrency)}，${q.hint}`)
-                                        setTimeout(() => (location.href = q.scheme), 400)
-                                      }}
-                                    >
-                                      {q.emoji} 開 {q.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
+                              {(() => {
+                                // iOS 只允許「直接點 <a>」開 App，不能用計時器或 location.href；複製金額在同一個手勢裡做
+                                const quick = QUICK_PAY.filter((q) => (pay!.quickPay ?? ['linepay', 'jkopay']).includes(q.id)).map((q) => ({ key: q.id, label: `${q.emoji} 開 ${q.label}`, href: q.scheme, hint: q.hint }))
+                                const custom = (pay!.appLinks ?? [])
+                                  .map((l) => ({ key: l.id, label: `📲 ${l.label || '轉帳 App'}`, href: buildAppUrl(l.template, { bankCode: pay!.bankCode, account: pay!.account, amount: t.remaining, note: p.name || cat.unnamed }), hint: '已幫你複製金額' }))
+                                  .filter((l) => isSafeAppUrl(l.href))
+                                const all = [...custom, ...quick]
+                                return all.length ? (
+                                  <div className="quickpay">
+                                    {all.map((l) => (
+                                      <a
+                                        key={l.key}
+                                        className="btn btn--ghost btn--sm"
+                                        href={l.href}
+                                        onClick={() => {
+                                          navigator.clipboard?.writeText(String(t.remaining)).catch(() => {})
+                                          flash(`已複製 ${fmtMoney(t.remaining, t.dueCurrency)}，${l.hint}`)
+                                        }}
+                                      >
+                                        {l.label}
+                                      </a>
+                                    ))}
+                                  </div>
+                                ) : null
+                              })()}
                               {pay!.note && <div className="muted small">{pay!.note}</div>}
                             </div>
                           ) : (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { twqrTransfer } from './twqr'
+import { buildAppUrl, isSafeAppUrl, twqrTransfer } from './twqr'
 
 describe('twqrTransfer', () => {
   it('matches OpenTWQR: punycode host, 16-digit account, amount in cents, D10=901, optional D9 note', () => {
@@ -12,5 +12,20 @@ describe('twqrTransfer', () => {
     expect(twqrTransfer({ bankCode: '808', account: '000', amount: 1 })).toBeNull()
     expect(twqrTransfer({ bankCode: '808', account: '123456', amount: 0 })).toBeNull()
     expect(twqrTransfer({ bankCode: '808', account: '123456', amount: 3_000_000 })).toBeNull()
+  })
+})
+
+describe('buildAppUrl', () => {
+  it('fills placeholders', () => {
+    expect(buildAppUrl('mybank://t?a={account}&p={paddedAccount}&b={bankCode}&m={amount}&c={amountCents}&n={note}', { bankCode: '013', account: '0012-3456', amount: 250.4, note: '拉麵' })).toBe(
+      'mybank://t?a=00123456&p=0000000000123456&b=013&m=250&c=25000&n=%E6%8B%89%E9%BA%B5',
+    )
+  })
+  it('blocks dangerous schemes', () => {
+    expect(isSafeAppUrl('jkopay://')).toBe(true)
+    expect(isSafeAppUrl('intent://#Intent;package=x;end')).toBe(true)
+    expect(isSafeAppUrl('https://x.y')).toBe(true)
+    expect(isSafeAppUrl('javascript:alert(1)')).toBe(false)
+    expect(isSafeAppUrl('hello')).toBe(false)
   })
 })

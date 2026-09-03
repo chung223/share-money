@@ -100,6 +100,8 @@ export interface PayInfo {
   quickPay?: ('linepay' | 'jkopay' | 'twpay')[]
   /** 分享頁顯示 TWQR 轉帳 QR（需要銀行代碼＋帳號）。預設開。 */
   showTwqr?: boolean
+  /** 自訂轉帳 App 連結範本（見 lib/twqr.ts buildAppUrl），例：mybank://transfer?acct={account}&amt={amount} */
+  appLinks?: { id: string; label: string; template: string }[]
 }
 
 /** Multi-device sync (end-to-end encrypted; see lib/sync.ts). */

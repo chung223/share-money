@@ -12,6 +12,35 @@ export const QUICK_PAY: { id: QuickPayApp; label: string; emoji: string; scheme:
   { id: 'twpay', label: '台灣 Pay', emoji: '🏦', scheme: 'twmp://', hint: '打開台灣 Pay 後掃上面的 QR，帳號金額自動帶入' },
 ]
 
+/** 使用者自訂範本的佔位符（與 OpenTWQR 相同）。 */
+export const APP_LINK_PLACEHOLDERS = ['{account}', '{paddedAccount}', '{bankCode}', '{amount}', '{amountCents}', '{note}'] as const
+
+export function buildAppUrl(template: string, o: { bankCode?: string; account?: string; amount: number; note?: string }): string {
+  const acct = (o.account ?? '').replace(/\D/g, '')
+  const amount = Math.round(o.amount)
+  return template
+    .trim()
+    .replace(/\{account\}/g, acct)
+    .replace(/\{paddedAccount\}/g, acct.replace(/^0+/, '').padStart(16, '0'))
+    .replace(/\{bankCode\}/g, (o.bankCode ?? '').replace(/\D/g, ''))
+    .replace(/\{amount\}/g, String(amount))
+    .replace(/\{amountCents\}/g, String(amount * 100))
+    .replace(/\{note\}/g, encodeURIComponent(o.note ?? ''))
+}
+
+/** 只允許 app scheme / intent / https，擋 javascript: 之類。 */
+export function isSafeAppUrl(u: string) {
+  return /^(?:[a-z][a-z0-9+.-]{1,30}:\/\/|intent:|https:\/\/)/i.test(u.trim()) && !/^(javascript|data|vbscript|file):/i.test(u.trim())
+}
+
+/** 常見 App 的範本，讓使用者一鍵加入再自己改。 */
+export const APP_LINK_PRESETS: { label: string; template: string }[] = [
+  { label: 'LINE Pay 付款碼', template: 'line://pay/generateQR' },
+  { label: '街口', template: 'jkopay://' },
+  { label: 'iPASS Money 掃碼', template: 'ipassmoney://cpm/scanner_pay' },
+  { label: '台灣 Pay', template: 'twmp://' },
+]
+
 /**
  * 格式對齊 OpenTWQR（https://github.com/garyellow/OpenTWQR，社群實測可被各銀行 App 掃）：
  *   TWQRP://xn--gmqw5ax42ad01c/158/02/V1?D5=<行代>&D6=<帳號補零16位>&D1=<金額，單位「分」>&D10=901&D9=<備註>
