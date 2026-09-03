@@ -245,7 +245,7 @@ export default function SharePage() {
                           {canPay ? (
                             <div className="stack-s">
                               {pay!.showTwqr !== false && pay!.bankCode && pay!.account && t.dueCurrency === 'TWD' && (() => {
-                                const code = twqrTransfer({ bankCode: pay!.bankCode!, account: pay!.account!, amount: t.remaining, name: snap.ownerName })
+                                const code = twqrTransfer({ bankCode: pay!.bankCode!, account: pay!.account!, amount: t.remaining, note: p.name || cat.unnamed })
                                 return code ? (
                                   <div className="twqr">
                                     <QrCode text={code} size={168} />

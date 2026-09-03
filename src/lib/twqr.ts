@@ -13,17 +13,21 @@ export const QUICK_PAY: { id: QuickPayApp; label: string; emoji: string; scheme:
 ]
 
 /**
- * 依國泰 CUBE 收款碼實測樣本對齊（2026-09-03 解碼）：
- *   TWQRP://個人轉帳/158/02/V1?D5=013&D6=0000699500327859
- * 整串再 encodeURIComponent 一次、帳號補零到 16 位、單位名稱固定「個人轉帳」。
- * 我們多帶 D1（金額，新台幣整數元）與 D10=901（幣別 TWD），讓掃描端把金額也帶入。
+ * 格式對齊 OpenTWQR（https://github.com/garyellow/OpenTWQR，社群實測可被各銀行 App 掃）：
+ *   TWQRP://xn--gmqw5ax42ad01c/158/02/V1?D5=<行代>&D6=<帳號補零16位>&D1=<金額，單位「分」>&D10=901&D9=<備註>
+ * 主機名是「個人轉帳」的 punycode。國泰 CUBE 的收款碼則是整串 percent-encode 的變體，掃描端兩種都吃。
  */
-export function twqrTransfer(o: { bankCode: string; account: string; amount: number; name?: string }): string | null {
+export function twqrTransfer(o: { bankCode: string; account: string; amount: number; note?: string }): string | null {
   const bank = o.bankCode.replace(/\D/g, '')
-  const acct = o.account.replace(/\D/g, '')
-  if (!/^\d{3}$/.test(bank) || acct.length < 6 || acct.length > 16) return null
-  if (!(o.amount > 0) || o.amount > 99_999_999) return null
-  const dollars = Math.round(o.amount)
-  const plain = `TWQRP://個人轉帳/158/02/V1?D1=${dollars}&D5=${bank}&D6=${acct.padStart(16, '0')}&D10=901`
-  return encodeURIComponent(plain)
+  const acct = o.account.replace(/\D/g, '').replace(/^0+/, '').slice(0, 16)
+  if (!/^\d{3}$/.test(bank) || acct.length < 1) return null
+  if (!(o.amount > 0) || o.amount > 2_000_000) return null
+  const q = new URLSearchParams()
+  q.append('D5', bank)
+  q.append('D6', acct.padStart(16, '0'))
+  q.append('D1', String(Math.round(o.amount * 100)))
+  q.append('D10', '901')
+  const note = (o.note ?? '').replace(/[\p{Extended_Pictographic}\u0000-\u001F]/gu, '').trim().slice(0, 20)
+  if (note) q.append('D9', note)
+  return `TWQRP://xn--gmqw5ax42ad01c/158/02/V1?${q.toString()}`
 }
