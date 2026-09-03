@@ -81,4 +81,12 @@ describe('applyShareEvents', () => {
     expect(d.projects[0].settled).toEqual({ x: true })
     expect(d.projects[0].updatedAt).toBe(50)
   })
+  it('accepts transfer keys (multi-payer) and rejects keys with unknown people', () => {
+    const d = data([proj('a', 10, { people: [me, { ...me, id: 'x' }] })])
+    applyShareEvents(d, [
+      { id: 1, shareId: 's', projectId: 'a', personId: 'x_me', kind: 'paid', createdAt: 50 },
+      { id: 2, shareId: 's', projectId: 'a', personId: 'x_zz', kind: 'paid', createdAt: 50 },
+    ])
+    expect(d.projects[0].settled).toEqual({ x_me: true })
+  })
 })

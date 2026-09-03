@@ -9,7 +9,7 @@ const MODE_LABEL: Record<Project['mode'], string> = { equal: '均攤', items: '�
 
 function ProjectCard({ p, base }: { p: Project; base: string }) {
   const r = useMemo(() => computeSplit(p), [p])
-  const others = r.people.filter((x) => !x.isPayer)
+  const others = r.transfers
   const settledCount = others.filter((x) => x.settled).length
   const allSettled = others.length > 0 && settledCount === others.length
   const pending = others.filter((x) => !x.settled)
@@ -38,7 +38,7 @@ function ProjectCard({ p, base }: { p: Project; base: string }) {
         <div className="project-card__total">{fmtMoney(r.grandTotalRounded, p.currency)}</div>
         {r.baseGrandTotal != null && p.currency !== base && <div className="project-card__base">≈ {fmtMoney(r.baseGrandTotal, base)}</div>}
         <div className={`pill ${allSettled ? 'pill--mint' : pending.length ? 'pill--pink' : 'pill--grey'}`}>
-          {allSettled ? '✓ 已結清' : others.length ? `${settledCount}/${others.length} 收款` : '只有自己'}
+          {allSettled ? '✓ 已結清' : others.length ? `${settledCount}/${others.length} ${r.multiPayer ? '轉帳' : '收款'}` : '只有自己'}
         </div>
       </div>
     </button>
@@ -52,17 +52,21 @@ export default function Home() {
   const encrypted = useStore((s) => s.encrypted)
   const lock = useStore((s) => s.lock)
 
+  const me = useStore((s) => s.data.me.id)
   const totalOwed = useMemo(() => {
     let sum = 0
     for (const p of projects) {
       const r = computeSplit(p)
-      for (const x of r.people) {
-        if (x.isPayer || x.settled) continue
-        sum += x.baseTotal ?? (p.currency === base ? x.totalRounded : 0)
+      for (const t of r.transfers) {
+        if (t.settled) continue
+        // money coming back to me (or to whoever paid, when I'm not in the project)
+        const toMe = t.to === me || (!p.people.some((x) => x.id === me) && t.to === p.payerId)
+        if (!toMe) continue
+        sum += t.baseAmount ?? (p.currency === base ? t.amount : 0)
       }
     }
     return sum
-  }, [projects, base])
+  }, [projects, base, me])
 
   const create = () => {
     const p = addProject()

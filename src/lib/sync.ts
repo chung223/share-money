@@ -211,7 +211,9 @@ export function applyShareEvents(data: AppData, events: ShareEvent[]): number[] 
     consumed.push(e.id)
     const p = data.projects.find((x) => x.id === e.projectId)
     if (!p) continue
-    if (!p.people.some((x) => x.id === e.personId)) continue
+    // personId is either a person (legacy single-payer) or a transfer key `${from}_${to}`
+    const ids = e.personId.split('_')
+    if (!ids.every((id) => p.people.some((x) => x.id === id))) continue
     p.settled[e.personId] = e.kind === 'paid'
     p.updatedAt = Math.max(p.updatedAt, e.createdAt)
   }

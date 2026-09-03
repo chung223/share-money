@@ -32,6 +32,11 @@ export interface Extra {
   split: ExtraSplit
 }
 
+export interface Payment {
+  personId: Id
+  amount: number
+}
+
 export interface Project {
   id: Id
   name: string
@@ -45,12 +50,21 @@ export interface Project {
   rateDate?: string
   rateSource?: 'api' | 'manual'
   mode: SplitMode
+  /** Primary payer. When `payments` is empty this person paid everything (classic single-payer). */
   payerId: Id
+  /**
+   * Multi-payer: who actually paid how much (project currency). Sum should equal the grand total.
+   * Empty/absent = single payer (`payerId`). Settlement then becomes a set of transfers (see split.ts).
+   */
+  payments?: Payment[]
   people: Person[]
   items: Item[]
   extras: Extra[]
-  /** personId -> paid back to payer */
-  settled: Record<Id, boolean>
+  /**
+   * Which transfers are done. Keyed by transfer key `${from}_${to}` (see split.ts transferKey).
+   * Legacy single-payer data keyed by personId is still understood.
+   */
+  settled: Record<string, boolean>
   note?: string
   /** Friend-facing share link (see lib/share.ts). Snapshot is re-uploaded on sync when stale. */
   share?: ProjectShare

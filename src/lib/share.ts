@@ -12,6 +12,8 @@ export interface ShareSnapshot {
   baseCurrency: string
   payInfo?: PayInfo
   ownerName: string
+  /** The owner's person id inside project.people, so the share page knows which transfers go to them. */
+  ownerId?: string
   sharedAt: number
 }
 
@@ -32,9 +34,9 @@ export async function decryptSnapshot(key: string, cipher: string) {
   return decryptWithKey<ShareSnapshot>(await importKey(key), cipher)
 }
 
-export function buildSnapshot(project: Project, baseCurrency: string, ownerName: string, payInfo?: PayInfo): ShareSnapshot {
+export function buildSnapshot(project: Project, baseCurrency: string, ownerName: string, payInfo?: PayInfo, ownerId?: string): ShareSnapshot {
   const { share: _share, ...rest } = project
-  return { v: 1, project: rest, baseCurrency, payInfo, ownerName, sharedAt: Date.now() }
+  return { v: 1, project: rest, baseCurrency, payInfo, ownerName, ownerId, sharedAt: Date.now() }
 }
 
 export function shareUrl(id: string, key: string, origin = location.origin) {

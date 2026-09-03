@@ -72,22 +72,26 @@ export default function SharePage() {
   const foreign = p.currency !== base
   const payer = p.people.find((x) => x.id === p.payerId)
   const me = who ? r.people.find((x) => x.person.id === who) : null
-  const meIsPayer = me?.isPayer ?? false
-  const iPaid = !!who && paid.includes(who)
-  const iSettled = !!me?.settled
+  const myTransfers = who ? r.transfers.filter((t) => t.from === who) : []
+  const meIsPayer = me ? (r.multiPayer ? myTransfers.length === 0 : me.isPayer) : false
   const pay = snap.payInfo
+  const ownerId = snap.ownerId ?? p.payerId
+  const nameOf = (id: string) => p.people.find((x) => x.id === id)
+  // legacy links report by personId; new ones by transfer key
+  const isReported = (t: { key: string; from: string; to: string }) => paid.includes(t.key) || (t.to === p.payerId && paid.includes(t.from))
 
   const choose = (id: string) => {
     setWho(id)
     if (WHO_KEY) localStorage.setItem(WHO_KEY, id)
   }
-  const report = async (kind: 'paid' | 'unpaid') => {
+  const report = async (key: string, kind: 'paid' | 'unpaid') => {
     if (!who || !loc) return
     setBusy(true)
     try {
-      const res = await fetch(`/api/share/${loc.id}/paid`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personId: who, kind }) })
+      const res = await fetch(`/api/share/${loc.id}/paid`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personId: key, kind }) })
       if (!res.ok) throw new Error('HTTP ' + res.status)
-      setStatus({ kind: 'ok', snap, paid: kind === 'paid' ? [...paid.filter((x) => x !== who), who] : paid.filter((x) => x !== who) })
+      const rest = paid.filter((x) => x !== key && x !== who)
+      setStatus({ kind: 'ok', snap, paid: kind === 'paid' ? [...rest, key] : rest })
       if (kind === 'paid') {
         setConfetti(true)
         setTimeout(() => setConfetti(false), 2600)
@@ -126,7 +130,11 @@ export default function SharePage() {
             </div>
             <div className="total-card__value">{fmtMoney(r.grandTotalRounded, p.currency)}</div>
             {foreign && r.baseGrandTotal != null && <div className="total-card__base">≈ {fmtMoney(r.baseGrandTotal, base)}</div>}
-            {payer && <div className="total-card__payer">由 {payer.emoji} {payer.name} 代墊 · {p.people.length} 人</div>}
+            {r.multiPayer ? (
+              <div className="total-card__payer">先付：{r.people.filter((x) => x.paid > 0).map((x) => `${x.person.emoji}${x.person.name} ${fmtMoney(x.paid, p.currency)}`).join('、')}</div>
+            ) : (
+              payer && <div className="total-card__payer">由 {payer.emoji} {payer.name} 代墊 · {p.people.length} 人</div>
+            )}
           </div>
           <div className="total-card__emoji">🧾</div>
         </div>
@@ -174,48 +182,58 @@ export default function SharePage() {
               </div>
             )}
 
-            {!meIsPayer && (
-              <>
-                {pay && (pay.account || pay.linePay) ? (
-                  <div className="pay-box stack-s">
-                    <div className="label">轉給 {snap.ownerName}</div>
-                    {pay.account && (
-                      <button type="button" className="pay-box__row" onClick={() => copy(`${pay.bankCode ? pay.bankCode + ' ' : ''}${pay.account}`, '帳號')}>
-                        <span>
-                          🏦 {pay.bankCode}
-                          {pay.bankName ? ` ${pay.bankName}` : ''}
-                        </span>
-                        <span className="strong">{pay.account}</span>
-                        <span className="muted small">複製</span>
+            {!meIsPayer &&
+              myTransfers.map((t) => {
+                const to = nameOf(t.to)
+                const toOwner = t.to === ownerId
+                const reported = isReported(t)
+                return (
+                  <div key={t.key} className="pay-box stack-s">
+                    <div className="label">
+                      轉給 {to?.emoji} {to?.name}
+                      {r.multiPayer && <span className="strong"> {fmtMoney(t.amount, p.currency)}</span>}
+                      {r.multiPayer && foreign && t.baseAmount != null && <span className="muted"> ≈ {fmtMoney(t.baseAmount, base)}</span>}
+                    </div>
+                    {toOwner && pay && (pay.account || pay.linePay) ? (
+                      <>
+                        {pay.account && (
+                          <button type="button" className="pay-box__row" onClick={() => copy(`${pay.bankCode ? pay.bankCode + ' ' : ''}${pay.account}`, '帳號')}>
+                            <span>
+                              🏦 {pay.bankCode}
+                              {pay.bankName ? ` ${pay.bankName}` : ''}
+                            </span>
+                            <span className="strong">{pay.account}</span>
+                            <span className="muted small">複製</span>
+                          </button>
+                        )}
+                        {pay.linePay && (
+                          <a className="btn btn--mint" href={pay.linePay} target="_blank" rel="noreferrer">
+                            💚 用 LINE Pay / 街口 轉帳
+                          </a>
+                        )}
+                        {pay.note && <div className="muted small">{pay.note}</div>}
+                      </>
+                    ) : (
+                      <p className="muted small">{toOwner ? `${snap.ownerName} 還沒留轉帳資訊，直接問本人吧。` : `帳號直接問 ${to?.name} 吧。`}</p>
+                    )}
+                    {t.settled ? (
+                      <div className="pill pill--mint center-self">✓ {to?.name} 已確認收到</div>
+                    ) : reported ? (
+                      <div className="stack-s">
+                        <div className="pill pill--mint center-self">✅ 已回報「我轉了」</div>
+                        <button type="button" className="btn btn--ghost btn--sm" disabled={busy} onClick={() => report(t.key, 'unpaid')}>
+                          按錯了，取消
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" className="btn btn--primary btn--lg" disabled={busy} onClick={() => report(t.key, 'paid')}>
+                        💸 我轉了
                       </button>
                     )}
-                    {pay.linePay && (
-                      <a className="btn btn--mint" href={pay.linePay} target="_blank" rel="noreferrer">
-                        💚 用 LINE Pay / 街口 轉帳
-                      </a>
-                    )}
-                    {pay.note && <div className="muted small">{pay.note}</div>}
                   </div>
-                ) : (
-                  <p className="muted small">{snap.ownerName} 還沒留轉帳資訊，直接問本人吧。</p>
-                )}
-
-                {iSettled ? (
-                  <div className="pill pill--mint center-self">✓ {snap.ownerName} 已確認收到</div>
-                ) : iPaid ? (
-                  <div className="stack-s">
-                    <div className="pill pill--mint center-self">✅ 已回報「我轉了」</div>
-                    <button type="button" className="btn btn--ghost btn--sm" disabled={busy} onClick={() => report('unpaid')}>
-                      按錯了，取消
-                    </button>
-                  </div>
-                ) : (
-                  <button type="button" className="btn btn--primary btn--lg" disabled={busy} onClick={() => report('paid')}>
-                    💸 我轉了
-                  </button>
-                )}
-              </>
-            )}
+                )
+              })}
+            {me && !meIsPayer && myTransfers.length === 0 && <p className="muted small">你不用轉錢 🎉</p>}
           </section>
         )}
 
@@ -223,14 +241,14 @@ export default function SharePage() {
           <div className="section-title">大家的份</div>
           <div className="stack-xs">
             {r.people.map((x) => {
-              const done = x.isPayer || x.settled
-              const reported = !done && paid.includes(x.person.id)
+              const done = (r.multiPayer ? x.paid > 0 && r.transfers.every((t) => t.from !== x.person.id) : x.isPayer) || x.settled
+              const reported = !done && r.transfers.some((t) => t.from === x.person.id && !t.settled && isReported(t))
               return (
                 <div key={x.person.id} className="line line--person">
                   <span className="row gap-s center">
                     <span className={`mini-avatar c-${x.person.color}`}>{x.person.emoji}</span>
                     {x.person.name}
-                    {x.isPayer && <span className="pill pill--butter">⭐ 代墊</span>}
+                    {(r.multiPayer ? x.paid > 0 : x.isPayer) && <span className="pill pill--butter">⭐ {r.multiPayer ? `先付 ${fmtMoney(x.paid, p.currency)}` : '代墊'}</span>}
                   </span>
                   <span className="row gap-s center">
                     <span className={done ? 'muted' : 'strong'}>{fmtMoney(x.totalRounded, p.currency)}</span>

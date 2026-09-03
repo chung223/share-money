@@ -389,7 +389,7 @@ export const useStore = create<State>((set, get) => ({
             delete data.projects.find((x) => x.id === p.id)!.share
             changed = true
           } else if (p.share.uploadedAt < p.updatedAt) {
-            const cipher = await encryptSnapshot(p.share.key, buildSnapshot(p, data.baseCurrency, data.me.name, data.payInfo))
+            const cipher = await encryptSnapshot(p.share.key, buildSnapshot(p, data.baseCurrency, data.me.name, data.payInfo, data.me.id))
             await api.share(base, keys.token, { projectId: p.id, cipher, expiresAt: p.share.expiresAt })
             if (data === get().data) data = structuredClone(data)
             data.projects.find((x) => x.id === p.id)!.share!.uploadedAt = now
@@ -452,7 +452,7 @@ export const useStore = create<State>((set, get) => ({
     const keys = await keysFor(cfg.secret)
     const key = p.share?.key ?? generateShareKey()
     const expiresAt = Date.now() + days * 86_400_000
-    const cipher = await encryptSnapshot(key, buildSnapshot(p, s.data.baseCurrency, s.data.me.name, s.data.payInfo))
+    const cipher = await encryptSnapshot(key, buildSnapshot(p, s.data.baseCurrency, s.data.me.name, s.data.payInfo, s.data.me.id))
     const r = await api.share(apiBase(cfg.serverUrl), keys.token, { projectId, cipher, expiresAt })
     get().updateProject(projectId, (pp) => (pp.share = { id: r.id, key, expiresAt: r.expiresAt, uploadedAt: Date.now() }), false)
     return r.id

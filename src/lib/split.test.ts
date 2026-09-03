@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeSplit, distributeRounding } from './split'
+import { computeSplit, distributeRounding, simplifyDebts } from './split'
 import type { Project } from './types'
 
 const base: Project = {
@@ -95,5 +95,44 @@ describe('computeSplit', () => {
     const r = computeSplit(p)
     expect(r.unassigned.length).toBe(1)
     expect(r.grandTotal).toBe(0)
+  })
+})
+
+describe('multi-payer + simplifyDebts', () => {
+  const items = [{ id: 'i1', name: '總額', price: 900, qty: 1, sharedBy: 'all' as const, kind: 'shared' as const }]
+  it('single payer: one transfer per non-payer, legacy settled keys still work', () => {
+    const r = computeSplit({ ...base, items, settled: { b: true } })
+    expect(r.multiPayer).toBe(false)
+    expect(r.transfers.map((t) => [t.from, t.to, t.amount, t.settled])).toEqual([
+      ['b', 'a', 300, true],
+      ['c', 'a', 300, false],
+    ])
+    expect(r.people.map((x) => [x.paid, x.net, x.settled])).toEqual([
+      [900, 600, true],
+      [0, -300, true],
+      [0, -300, false],
+    ])
+    expect(r.paymentsDiff).toBe(0)
+  })
+  it('two payers: nets and a minimal transfer set', () => {
+    // A paid 600, C paid 300; everyone owes 300 -> only B pays A 300
+    const r = computeSplit({ ...base, items, payments: [{ personId: 'a', amount: 600 }, { personId: 'c', amount: 300 }] })
+    expect(r.multiPayer).toBe(true)
+    expect(r.people.map((x) => x.net)).toEqual([300, -300, 0])
+    expect(r.transfers.map((t) => [t.from, t.to, t.amount])).toEqual([['b', 'a', 300]])
+    expect(r.people[1].settled).toBe(false)
+    expect(computeSplit({ ...base, items, payments: [{ personId: 'a', amount: 600 }, { personId: 'c', amount: 300 }], settled: { b_a: true } }).people[1].settled).toBe(true)
+  })
+  it('reports when payments do not add up', () => {
+    const r = computeSplit({ ...base, items, payments: [{ personId: 'a', amount: 500 }] })
+    expect(r.paymentsDiff).toBe(-400)
+  })
+  it('simplifyDebts greedy matching', () => {
+    expect(simplifyDebts([{ id: 'a', net: 50 }, { id: 'b', net: -20 }, { id: 'c', net: -30 }], 0)).toEqual([
+      { from: 'c', to: 'a', amount: 30 },
+      { from: 'b', to: 'a', amount: 20 },
+    ])
+    expect(simplifyDebts([{ id: 'a', net: 0.004 }, { id: 'b', net: -0.004 }], 2)).toEqual([])
+    expect(simplifyDebts([{ id: 'a', net: 10.5 }, { id: 'b', net: -10.5 }], 2)).toEqual([{ from: 'b', to: 'a', amount: 10.5 }])
   })
 })

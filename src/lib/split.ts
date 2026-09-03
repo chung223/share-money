@@ -17,7 +17,21 @@ export interface PersonResult {
   total: number // project currency, unrounded
   totalRounded: number // project currency, rounded to currency decimals, drift-corrected
   baseTotal: number | null // base currency, rounded, drift-corrected (null when no rate)
+  /** Paid up front (project currency, rounded). Single-payer: grand total for the payer, 0 for others. */
+  paid: number
+  /** paid - totalRounded: positive = others owe this person. */
+  net: number
   isPayer: boolean
+  /** All of this person's outgoing transfers are done (true when there are none). */
+  settled: boolean
+}
+
+export interface Transfer {
+  key: string
+  from: Id
+  to: Id
+  amount: number // project currency
+  baseAmount: number | null
   settled: boolean
 }
 
@@ -29,6 +43,53 @@ export interface SplitResult {
   grandTotalRounded: number
   baseGrandTotal: number | null
   unassigned: Item[] // items nobody shares (excluded from totals)
+  /** Who pays whom (already minimised for multi-payer). */
+  transfers: Transfer[]
+  multiPayer: boolean
+  /** Multi-payer only: payments sum minus grand total (0 when it adds up). */
+  paymentsDiff: number
+}
+
+export function transferKey(from: Id, to: Id) {
+  return `${from}_${to}`
+}
+
+export function hasMultiPayer(project: Project) {
+  return !!project.payments && project.payments.filter((x) => x.amount > 0).length > 0
+}
+
+/** Legacy data marked `settled[personId]` meaning "paid the (single) payer back". */
+export function isTransferSettled(settled: Record<string, boolean>, from: Id, to: Id, payerId: Id) {
+  const k = transferKey(from, to)
+  if (k in settled) return !!settled[k]
+  return to === payerId && !!settled[from]
+}
+
+/**
+ * Greedy debt simplification: match the biggest creditor with the biggest debtor until everyone is
+ * at zero. Not guaranteed minimal in general, but optimal enough for a handful of friends.
+ */
+export function simplifyDebts(nets: { id: Id; net: number }[], decimals: number): { from: Id; to: Id; amount: number }[] {
+  const f = 10 ** decimals
+  const unit = 1 / f
+  const creditors = nets.filter((x) => x.net > unit / 2).map((x) => ({ id: x.id, left: Math.round(x.net * f) }))
+  const debtors = nets.filter((x) => x.net < -unit / 2).map((x) => ({ id: x.id, left: Math.round(-x.net * f) }))
+  const out: { from: Id; to: Id; amount: number }[] = []
+  creditors.sort((a, b) => b.left - a.left)
+  debtors.sort((a, b) => b.left - a.left)
+  let i = 0
+  let j = 0
+  while (i < creditors.length && j < debtors.length) {
+    const c = creditors[i]
+    const d = debtors[j]
+    const amt = Math.min(c.left, d.left)
+    if (amt > 0) out.push({ from: d.id, to: c.id, amount: amt / f })
+    c.left -= amt
+    d.left -= amt
+    if (c.left === 0) i += 1
+    if (d.left === 0) j += 1
+  }
+  return out
 }
 
 export function itemTotal(item: Item) {
@@ -94,8 +155,10 @@ export function computeSplit(project: Project): SplitResult {
       total: 0,
       totalRounded: 0,
       baseTotal: null,
+      paid: 0,
+      net: 0,
       isPayer: p.id === project.payerId,
-      settled: !!project.settled[p.id],
+      settled: true,
     })
   }
 
@@ -153,7 +216,42 @@ export function computeSplit(project: Project): SplitResult {
     baseGrandTotal = roundTo(grandTotal * project.rate, baseDecimals)
   }
 
-  return { people: results, itemsTotal, extrasTotal, grandTotal, grandTotalRounded, baseGrandTotal, unassigned }
+  // ---- who paid, who owes whom ----
+  const multiPayer = hasMultiPayer(project)
+  let paymentsDiff = 0
+  if (multiPayer) {
+    for (const pay of project.payments!) {
+      const r = perPerson.get(pay.personId)
+      if (r) r.paid += roundTo(pay.amount, decimals)
+    }
+    paymentsDiff = roundTo(results.reduce((a, r) => a + r.paid, 0) - grandTotalRounded, decimals)
+  } else {
+    const payer = perPerson.get(project.payerId)
+    if (payer) payer.paid = grandTotalRounded
+  }
+  for (const r of results) r.net = roundTo(r.paid - r.totalRounded, decimals)
+
+  let raw: { from: Id; to: Id; amount: number }[]
+  if (multiPayer) raw = simplifyDebts(results.map((r) => ({ id: r.person.id, net: r.net })), decimals)
+  else raw = results.filter((r) => !r.isPayer && r.totalRounded > 0).map((r) => ({ from: r.person.id, to: project.payerId, amount: r.totalRounded }))
+  const rate = project.rate != null && project.rate > 0 ? project.rate : null
+  const transfers: Transfer[] = raw.map((t) => ({
+    key: transferKey(t.from, t.to),
+    from: t.from,
+    to: t.to,
+    amount: t.amount,
+    baseAmount: rate ? roundTo(t.amount * rate, baseDecimals) : null,
+    settled: isTransferSettled(project.settled, t.from, t.to, project.payerId),
+  }))
+  // keep per-person base amounts consistent with the drift-corrected totals in single-payer mode
+  if (!multiPayer) for (const t of transfers) t.baseAmount = perPerson.get(t.from)!.baseTotal
+  for (const r of results) {
+    const mine = transfers.filter((t) => t.from === r.person.id)
+    r.settled = mine.every((t) => t.settled)
+    if (!multiPayer && r.isPayer) r.settled = true
+  }
+
+  return { people: results, itemsTotal, extrasTotal, grandTotal, grandTotalRounded, baseGrandTotal, unassigned, transfers, multiPayer, paymentsDiff }
 }
 
 export function extraAmount(extra: Extra, itemsTotal: number) {
@@ -169,12 +267,29 @@ export function summaryText(project: Project, result: SplitResult, baseCurrency:
   lines.push(`${project.emoji} ${project.name}（${project.date}）`)
   lines.push(`總計 ${fmt(result.grandTotalRounded)}${result.baseGrandTotal != null ? ` ≈ ${fmtMoney(result.baseGrandTotal, baseCurrency)}` : ''}`)
   const payer = project.people.find((p) => p.id === project.payerId)
-  if (payer) lines.push(`由 ${payer.emoji}${payer.name} 代墊`)
+  if (result.multiPayer) {
+    const payers = result.people.filter((r) => r.paid > 0).map((r) => `${r.person.emoji}${r.person.name} ${fmt(r.paid)}`)
+    lines.push(`先付：${payers.join('、')}`)
+  } else if (payer) lines.push(`由 ${payer.emoji}${payer.name} 代墊`)
   lines.push('')
-  for (const r of result.people) {
-    const tag = r.isPayer ? '（代墊）' : r.settled ? ' ✅' : ''
-    const base = r.baseTotal != null ? ` ≈ ${fmtMoney(r.baseTotal, baseCurrency)}` : ''
-    lines.push(`${r.person.emoji} ${r.person.name}：${fmt(r.totalRounded)}${base}${tag}`)
+  const name = (id: string) => {
+    const x = project.people.find((p) => p.id === id)
+    return x ? `${x.emoji} ${x.name}` : '？'
+  }
+  if (result.multiPayer) {
+    for (const r of result.people) lines.push(`${r.person.emoji} ${r.person.name}：應付 ${fmt(r.totalRounded)}`)
+    lines.push('')
+    lines.push('💸 誰轉給誰')
+    for (const t of result.transfers) {
+      const base = t.baseAmount != null ? ` ≈ ${fmtMoney(t.baseAmount, baseCurrency)}` : ''
+      lines.push(`${name(t.from)} → ${name(t.to)}：${fmt(t.amount)}${base}${t.settled ? ' ✅' : ''}`)
+    }
+  } else {
+    for (const r of result.people) {
+      const tag = r.isPayer ? '（代墊）' : r.settled ? ' ✅' : ''
+      const base = r.baseTotal != null ? ` ≈ ${fmtMoney(r.baseTotal, baseCurrency)}` : ''
+      lines.push(`${r.person.emoji} ${r.person.name}：${fmt(r.totalRounded)}${base}${tag}`)
+    }
   }
   lines.push('')
   lines.push(`— 반반 BanBan 半半分帳 ${cur.flag}`)
