@@ -39,7 +39,7 @@ export default function PayInfoSection() {
         🏦 銀行轉帳 QR（TWQR）：朋友用銀行 App / 台灣 Pay 掃，帳號金額自動帶入（需填銀行代碼＋帳號）
       </label>
       {QUICK_PAY.map((q) => {
-        const list = payInfo.quickPay ?? ['linepay', 'jkopay']
+        const list = payInfo.quickPay ?? ['jkopay', 'linepay']
         const on = list.includes(q.id)
         return (
           <label key={q.id} className="row gap-s center small">

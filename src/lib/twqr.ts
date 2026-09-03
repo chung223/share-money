@@ -4,12 +4,21 @@
  *   格式：TWQRP://<顯示名稱>/158/02/V1?D1=<金額，單位分>&D5=<銀行代碼>&D6=<帳號>&D10=901（901 = 新台幣）
  * - LINE Pay / 街口 只有「打開 App」的 scheme，沒有帶金額的轉帳連結；所以先把金額複製到剪貼簿再開。
  */
-export type QuickPayApp = 'linepay' | 'jkopay' | 'twpay'
+export type QuickPayApp = 'linepay' | 'jkopay' | 'twpay' | 'pxpay'
 
+/**
+ * 2026-09-04 上網核對過的 URL scheme（數位時代／蘋果仁／PTT iOS 板／kinta.ma 整理）：
+ * - 街口 jkos://transfer 直接開「轉帳」頁（但不帶對象與金額）
+ * - LINE Pay 只有 generateQR（付款碼）與 scanQR（掃碼），沒有轉帳頁
+ * - 台灣 Pay twmpshortcut://?type=scan 開掃碼
+ * - 全支付 com.pxpay.plus://vmykjjouv 開轉帳
+ * 沒有任何一家公開「帶金額轉帳」的連結。
+ */
 export const QUICK_PAY: { id: QuickPayApp; label: string; emoji: string; scheme: string; hint: string }[] = [
-  { id: 'linepay', label: 'LINE Pay', emoji: '💚', scheme: 'line://pay/generateQR', hint: '打開 LINE Pay 後到「轉帳」選對方，金額已幫你複製' },
-  { id: 'jkopay', label: '街口', emoji: '🟥', scheme: 'jkopay://', hint: '打開街口後選「轉帳」，金額已幫你複製' },
-  { id: 'twpay', label: '台灣 Pay', emoji: '🏦', scheme: 'twmp://', hint: '打開台灣 Pay 後掃上面的 QR，帳號金額自動帶入' },
+  { id: 'jkopay', label: '街口轉帳', emoji: '🟥', scheme: 'jkos://transfer', hint: '街口轉帳頁已開，選對方、貼上金額' },
+  { id: 'linepay', label: 'LINE Pay', emoji: '💚', scheme: 'line://pay/generateQR', hint: '到 LINE Pay 的「轉帳」選對方，金額已幫你複製' },
+  { id: 'pxpay', label: '全支付轉帳', emoji: '🟩', scheme: 'com.pxpay.plus://vmykjjouv', hint: '全支付轉帳頁已開，貼上金額' },
+  { id: 'twpay', label: '台灣 Pay 掃碼', emoji: '🏦', scheme: 'twmpshortcut://?type=scan', hint: '用它掃另一台螢幕上的 QR；同一支手機請先存 QR 圖再從相簿選' },
 ]
 
 /** 使用者自訂範本的佔位符（與 OpenTWQR 相同）。 */
@@ -35,10 +44,16 @@ export function isSafeAppUrl(u: string) {
 
 /** 常見 App 的範本，讓使用者一鍵加入再自己改。 */
 export const APP_LINK_PRESETS: { label: string; template: string }[] = [
-  { label: 'LINE Pay 付款碼', template: 'line://pay/generateQR' },
-  { label: '街口', template: 'jkopay://' },
+  { label: '街口 掃碼', template: 'jkos://scanQRCode' },
+  { label: 'LINE Pay 掃碼', template: 'line://pay/scanQR' },
+  { label: '玉山 Wallet 掃碼', template: 'esunwallet://scanpay' },
+  { label: '全支付 掃碼', template: 'com.pxpay.plus://nlauluf' },
+  { label: 'Richart Life 掃碼', template: 'cardaily://?stateName=N000001_001' },
+  { label: 'Pi 拍錢包 掃碼', template: 'pi://widget/Scanner' },
   { label: 'iPASS Money 掃碼', template: 'ipassmoney://cpm/scanner_pay' },
-  { label: '台灣 Pay', template: 'twmp://' },
+  { label: 'iPASS Money 付款碼', template: 'https://nwww.ipasspay.com.tw/online/mpm/mycode_pay' },
+  { label: '悠遊付 付款碼', template: 'tw.com.easycard.easycardwallet://paymentCode' },
+  { label: '台灣 Pay 付款碼', template: 'twmpshortcut://?type=payment' },
 ]
 
 /**

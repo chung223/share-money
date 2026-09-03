@@ -131,6 +131,24 @@ export default function SharePage() {
       setBusy(false)
     }
   }
+  const saveQr = async (code: string, name: string) => {
+    try {
+      const { default: QRCode } = await import('qrcode')
+      const url = await QRCode.toDataURL(code, { width: 800, margin: 2, errorCorrectionLevel: 'M' })
+      const blob = await (await fetch(url)).blob()
+      const file = new File([blob], `twqr-${name}.png`, { type: 'image/png' })
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: '轉帳 QR' })
+        return
+      }
+      const a = document.createElement('a')
+      a.href = url
+      a.download = file.name
+      a.click()
+    } catch {
+      flash('存不了，長按 QR 圖片也可以儲存')
+    }
+  }
   const copy = (text: string, what: string) =>
     navigator.clipboard
       .writeText(text)
@@ -249,9 +267,13 @@ export default function SharePage() {
                                 return code ? (
                                   <div className="twqr">
                                     <QrCode text={code} size={168} />
-                                    <div className="small">
-                                      <div className="strong">🏦 銀行 App 掃這個</div>
-                                      <div className="muted">台灣 Pay 或任一家銀行 App 的「掃碼轉帳」，帳號和 {fmtMoney(t.remaining, 'TWD')} 會自動帶入。</div>
+                                    <div className="small stack-xs">
+                                      <div className="strong">🏦 銀行 App 掃這個（TWQR）</div>
+                                      <div className="muted">任一家銀行 App 或台灣 Pay 的「掃碼轉帳」，帳號和 {fmtMoney(t.remaining, 'TWD')} 會自動帶入。</div>
+                                      <div className="muted">同一支手機看這頁？先「存 QR 圖片」，再到銀行 App 掃碼頁選相簿。</div>
+                                      <button type="button" className="btn btn--ghost btn--sm" onClick={() => saveQr(code, `${p.name || '轉帳'}-${fmtMoney(t.remaining, 'TWD')}`)}>
+                                        💾 存 QR 圖片
+                                      </button>
                                     </div>
                                   </div>
                                 ) : null
@@ -273,7 +295,7 @@ export default function SharePage() {
                               )}
                               {(() => {
                                 // iOS 只允許「直接點 <a>」開 App，不能用計時器或 location.href；複製金額在同一個手勢裡做
-                                const quick = QUICK_PAY.filter((q) => (pay!.quickPay ?? ['linepay', 'jkopay']).includes(q.id)).map((q) => ({ key: q.id, label: `${q.emoji} 開 ${q.label}`, href: q.scheme, hint: q.hint }))
+                                const quick = QUICK_PAY.filter((q) => (pay!.quickPay ?? ['jkopay', 'linepay']).includes(q.id)).map((q) => ({ key: q.id, label: `${q.emoji} 開 ${q.label}`, href: q.scheme, hint: q.hint }))
                                 const custom = (pay!.appLinks ?? [])
                                   .map((l) => ({ key: l.id, label: `📲 ${l.label || '轉帳 App'}`, href: buildAppUrl(l.template, { bankCode: pay!.bankCode, account: pay!.account, amount: t.remaining, note: p.name || cat.unnamed }), hint: '已幫你複製金額' }))
                                   .filter((l) => isSafeAppUrl(l.href))

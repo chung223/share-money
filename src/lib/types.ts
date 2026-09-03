@@ -97,7 +97,7 @@ export interface PayInfo {
   linePay?: string
   note?: string
   /** 分享頁要顯示哪些行動支付快捷按鈕（見 lib/twqr.ts）。未設定 = LINE Pay + 街口。 */
-  quickPay?: ('linepay' | 'jkopay' | 'twpay')[]
+  quickPay?: ('linepay' | 'jkopay' | 'twpay' | 'pxpay')[]
   /** 分享頁顯示 TWQR 轉帳 QR（需要銀行代碼＋帳號）。預設開。 */
   showTwqr?: boolean
   /** 自訂轉帳 App 連結範本（見 lib/twqr.ts buildAppUrl），例：mybank://transfer?acct={account}&amt={amount} */
