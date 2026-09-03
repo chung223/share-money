@@ -6,6 +6,8 @@ import { fetchRate } from '../lib/rates'
 import { CURRENCIES, PROJECT_EMOJIS, currencyMeta, type Extra, type Item, type Person, type Project, type SplitMode } from '../lib/types'
 import { Avatar, Confetti, EmojiPicker, Empty, MoneyInput, Segmented, Sheet } from '../components/ui'
 import ShareLinkSheet from '../components/ShareLinkSheet'
+import ReminderSheet from '../components/ReminderSheet'
+import type { PersonResult } from '../lib/split'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
 import { PersonEditor } from './SettingsPage'
 
@@ -596,6 +598,7 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
   const [open, setOpen] = useState<string | null>(null)
   const [confetti, setConfetti] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
+  const [remind, setRemind] = useState<PersonResult | null>(null)
   const foreign = p.currency !== base
   const others = result.people.filter((r) => !r.isPayer)
   const allSettled = others.length > 0 && others.every((r) => r.settled)
@@ -693,9 +696,16 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
                 </div>
               )}
               {!r.isPayer && (
-                <button type="button" className={`btn btn--sm ${r.settled ? 'btn--mint' : 'btn--ghost'} person-result__settle`} onClick={() => toggleSettled(r.person.id)}>
-                  {r.settled ? '✓ 已還我' : '還沒還'}
-                </button>
+                <div className="person-result__actions">
+                  {!r.settled && (
+                    <button type="button" className="btn btn--sm btn--butter" onClick={() => setRemind(r)}>
+                      📣 催款
+                    </button>
+                  )}
+                  <button type="button" className={`btn btn--sm ${r.settled ? 'btn--mint' : 'btn--ghost'}`} onClick={() => toggleSettled(r.person.id)}>
+                    {r.settled ? '✓ 已還我' : '還沒還'}
+                  </button>
+                </div>
               )}
             </div>
           )
@@ -710,6 +720,7 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
       </button>
       <p className="muted small center-text">上面是純文字；下面的連結讓朋友看自己的份、按一下回報轉帳。</p>
       <ShareLinkSheet p={p} open={linkOpen} onClose={() => setLinkOpen(false)} />
+      <ReminderSheet p={p} person={remind} onClose={() => setRemind(null)} />
     </main>
   )
 }

@@ -1587,3 +1587,8 @@ button.avatar:active {
 .share-footer {
   padding: 20px 0 calc(24px + var(--sab));
 }
+.person-result__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
