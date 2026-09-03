@@ -64,7 +64,7 @@ export interface ChatInput {
 /** 組出 fetch 的 URL / headers / body（任意 system/user）。抽出來方便測試，也讓瀏覽器與伺服器用同一份。 */
 export function buildChatRequest(cfg: AiProviderConfig, input: ChatInput, opts: { browser?: boolean } = {}): { url: string; init: RequestInit } {
   const userText = input.user
-  const maxTokens = input.maxTokens ?? 2000
+  const maxTokens = input.maxTokens ?? 4000
   const temperature = input.temperature ?? 0.1
   if (cfg.format === 'anthropic') {
     const content: unknown[] = []
@@ -92,7 +92,7 @@ export function buildChatRequest(cfg: AiProviderConfig, input: ChatInput, opts: 
 
 /** 收據解析專用的請求。 */
 export function buildRequest(cfg: AiProviderConfig, input: ParseInput, opts: { browser?: boolean } = {}) {
-  return buildChatRequest(cfg, { system: RECEIPT_SYSTEM, user: input.text ? `收據內容：\n${input.text}` : '請解析這張收據。', image: input.image }, opts)
+  return buildChatRequest(cfg, { system: RECEIPT_SYSTEM, user: input.text ? `收據內容：\n${input.text}` : '請解析這張收據。', image: input.image, maxTokens: 4000 }, opts)
 }
 
 /** 任意對話：回傳模型文字（已去掉 <think>）。 */
@@ -111,7 +111,10 @@ export async function callChat(cfg: AiProviderConfig, input: ChatInput, opts: { 
     } catch {
       throw new Error('回應不是 JSON：' + bodyText.slice(0, 120))
     }
-    return extractText(cfg.format, j).replace(/<think>[\s\S]*?<\/think>/g, '').trim()
+    const text = extractText(cfg.format, j)
+    // 會「思考」的模型（MiniMax M2/M3、DeepSeek R1…）把推理放在 <think>；沒收尾代表 token 不夠被截斷
+    if (/<think>/.test(text) && !/<\/think>/.test(text)) throw new Error('模型還在思考就被截斷了（max tokens 不夠），請提高上限或換模型')
+    return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
   } finally {
     clearTimeout(timer)
   }

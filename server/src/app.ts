@@ -420,7 +420,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const user = typeof body?.user === 'string' ? body.user.slice(0, 12000) : ''
     const img = body?.image as { mediaType?: string; base64?: string } | undefined
     const image = img && typeof img.base64 === 'string' && img.base64.length < 6_000_000 && /^image\/(jpeg|png|webp|gif)$/.test(img.mediaType ?? '') ? { mediaType: img.mediaType as string, base64: img.base64 } : undefined
-    const maxTokens = Math.min(4000, Math.max(100, Number(body?.maxTokens) || 1500))
+    const maxTokens = Math.min(8000, Math.max(200, Number(body?.maxTokens) || 4000))
     return system && (user || image) ? { system, user, image, maxTokens } : null
   }
   app.post('/api/ai/chat', async (c) => {

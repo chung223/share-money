@@ -74,7 +74,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
     try {
       const items = project.items.filter((it) => it.price !== 0)
       const user = `品項：\n${items.map((it, i) => `${i}. ${it.name || '（未命名）'} ×${it.qty} ${it.price}`).join('\n')}${assignHint.trim() ? `\n補充說明：${assignHint.trim()}` : ''}`
-      const raw = await aiChat({ system: assignSystem(project.people.map((x) => x.name), project.mode === 'mains' ? 'mains' : 'items'), user, maxTokens: 1200 })
+      const raw = await aiChat({ system: assignSystem(project.people.map((x) => x.name), project.mode === 'mains' ? 'mains' : 'items'), user, maxTokens: 3000 })
       const patches = normaliseAssign(raw, items, project.people)
       updateProject(project.id, (pp) => {
         if (pp.mode === 'equal') pp.mode = 'items'

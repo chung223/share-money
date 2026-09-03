@@ -58,7 +58,7 @@ export default function QuickCreateSheet({ open, onClose }: { open: boolean; onC
     setBusy(true)
     try {
       const ctx = { me: data.me, friends: data.friends, baseCurrency: data.baseCurrency, today: today() }
-      const raw = await aiChat({ system: draftSystem({ meName: data.me.name, friendNames: data.friends.map((f) => f.name), baseCurrency: data.baseCurrency, today: ctx.today }), user: text.trim(), maxTokens: 1500 })
+      const raw = await aiChat({ system: draftSystem({ meName: data.me.name, friendNames: data.friends.map((f) => f.name), baseCurrency: data.baseCurrency, today: ctx.today }), user: text.trim(), maxTokens: 4000 })
       setDraft(normaliseDraft(raw, ctx))
     } catch (e) {
       showToast(e instanceof Error ? e.message.slice(0, 100) : 'AI 失敗', '😵')

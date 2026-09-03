@@ -29,7 +29,7 @@ export default function ReminderSheet({ p, person, amount, baseAmount, amountTex
       const daysAgo = Math.max(0, Math.round((Date.now() - new Date(p.date + 'T00:00:00').getTime()) / 86_400_000))
       const amt = amountText ?? (amount !== undefined ? fmtMoney(amount, p.currency) : fmtMoney(person.totalRounded, p.currency))
       const user = reminderUser({ toName: person.person.name, amountText: amt, what: `${fmtDateShort(p.date)} ${p.emoji}${p.name || '那次'}`, daysAgo, tone: TONES.find((t) => t.value === tone)?.label ?? '正常', payLines: payLines(payInfo), link })
-      const out = await aiChat({ system: reminderSystem(), user, maxTokens: 400, temperature: 0.9 })
+      const out = await aiChat({ system: reminderSystem(), user, maxTokens: 2000, temperature: 0.9 })
       if (out.trim()) setText(out.trim())
     } catch (e) {
       showToast(e instanceof Error ? e.message.slice(0, 100) : 'AI 失敗', '😵')
