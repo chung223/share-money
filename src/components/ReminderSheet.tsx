@@ -11,6 +11,7 @@ import { aiChat } from '../lib/ai'
 import { reminderSystem, reminderUser } from '../lib/aiAssist'
 import { payLines, fmtDateShort } from '../lib/reminder'
 import { useAiAvailable } from './useAiAvailable'
+import { isMobile, lineShareUrl } from '../lib/lineShare'
 
 const TONE_KEY = 'banban:reminderTone'
 
@@ -97,8 +98,13 @@ export default function ReminderSheet({ p, person, amount, baseAmount, amountTex
           <button type="button" className="btn btn--ghost grow" onClick={copy}>
             📋 複製
           </button>
+          {isMobile() && (
+            <a className="btn btn--mint grow" href={lineShareUrl(text)} target="_blank" rel="noreferrer" onClick={() => setTimeout(onClose, 300)}>
+              💚 傳到 LINE
+            </a>
+          )}
           <button type="button" className="btn btn--primary grow" onClick={send}>
-            📤 傳給對方
+            📤 其他方式
           </button>
         </div>
       </div>

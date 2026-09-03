@@ -6,6 +6,7 @@ import { fmtDateShort, payLines } from '../lib/reminder'
 import { shareUrl } from '../lib/share'
 import { navigate } from '../router'
 import { Avatar, Sheet } from './ui'
+import { isMobile, lineShareUrl } from '../lib/lineShare'
 
 /** 誰欠我多少：跨帳本加總、抵銷、一次催款。 */
 export default function BalancesSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -18,7 +19,7 @@ export default function BalancesSheet({ open, onClose }: { open: boolean; onClos
   const balances = useMemo(() => personBalances(projects, me.id, base), [projects, me.id, base])
   const total = balances.reduce((a, b) => a + Math.max(0, b.net), 0)
 
-  const remind = async (b: PersonBalance) => {
+  const buildText = (b: PersonBalance) => {
     const owed = b.lines.filter((l) => l.signed > 0)
     const lines = [`${b.person.name}～ 幫你整理了一下，總共還有 ${fmtMoney(b.net, base)}：`]
     for (const l of owed) lines.push(`・${fmtDateShort(l.project.date)} ${l.project.emoji}${l.project.name || '未命名'} ${fmtMoney(l.signed, base)}`)
@@ -27,7 +28,10 @@ export default function BalancesSheet({ open, onClose }: { open: boolean; onClos
     if (pay.length) lines.push('轉這裡就好：', ...pay)
     const links = owed.map((l) => l.project.share).filter((s): s is NonNullable<typeof s> => !!s && s.expiresAt > Date.now())
     if (links.length === 1) lines.push(`明細：${shareUrl(links[0].id, links[0].key)}`)
-    const text = lines.join('\n')
+    return lines.join('\n')
+  }
+  const remind = async (b: PersonBalance) => {
+    const text = buildText(b)
     try {
       if (navigator.share) await navigator.share({ text })
       else {
@@ -76,9 +80,16 @@ export default function BalancesSheet({ open, onClose }: { open: boolean; onClos
                         ))}
                       </div>
                       {b.net > 0 && (
-                        <button type="button" className="btn btn--butter btn--sm center-self" onClick={() => remind(b)}>
-                          📣 一次催 {fmtMoney(b.net, base)}
-                        </button>
+                        <div className="row gap-s center-self">
+                          {isMobile() && (
+                            <a className="btn btn--mint btn--sm" href={lineShareUrl(buildText(b))} target="_blank" rel="noreferrer">
+                              💚 LINE 催 {fmtMoney(b.net, base)}
+                            </a>
+                          )}
+                          <button type="button" className="btn btn--butter btn--sm" onClick={() => remind(b)}>
+                            📣 其他方式
+                          </button>
+                        </div>
                       )}
                     </>
                   )}

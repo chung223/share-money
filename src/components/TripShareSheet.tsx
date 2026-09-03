@@ -4,6 +4,7 @@ import type { Trip } from '../lib/types'
 import { tripJoinUrl } from '../lib/tripSync'
 import { Sheet } from './ui'
 import QrCode from './QrCode'
+import { isMobile, lineShareUrl } from '../lib/lineShare'
 
 /** 共編：產生「連結＋金鑰」給同行的人；拿到的人可以一起記、一起看結算。 */
 export default function TripShareSheet({ trip, open, onClose }: { trip: Trip; open: boolean; onClose: () => void }) {
@@ -54,9 +55,16 @@ export default function TripShareSheet({ trip, open, onClose }: { trip: Trip; op
               <QrCode text={url!} size={200} />
               <code className="code-box code-box--wrap">{url}</code>
             </div>
-            <button type="button" className="btn btn--primary btn--lg" onClick={send}>
-              📤 傳給同行的人
-            </button>
+            <div className="row gap">
+              {isMobile() && (
+                <a className="btn btn--mint btn--lg grow" href={lineShareUrl(`${trip.emoji} ${trip.name}｜一起記帳：${url}\n點開選自己是誰，就能看到結算、也能一起加帳本。`)} target="_blank" rel="noreferrer">
+                  💚 傳到 LINE
+                </a>
+              )}
+              <button type="button" className="btn btn--primary btn--lg grow" onClick={send}>
+                📤 其他方式
+              </button>
+            </div>
             <p className="muted small center-text">
               你是{trip.share.role === 'owner' ? '發起人' : '成員'} · 伺服器版本 {trip.share.version} · 改動會在幾秒內自動同步
             </p>

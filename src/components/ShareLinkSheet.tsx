@@ -4,6 +4,7 @@ import { defaultOgTitle, SHARE_DURATIONS, shareUrl } from '../lib/share'
 import { categoryOf } from '../lib/category'
 import type { Project } from '../lib/types'
 import { Mascot, Sheet } from './ui'
+import { isMobile, lineShareUrl } from '../lib/lineShare'
 
 /** 給朋友的連結：產生、預覽（LINE 卡片長什麼樣）、延長、停用。 */
 export default function ShareLinkSheet({ p, open, onClose }: { p: Project; open: boolean; onClose: () => void }) {
@@ -81,9 +82,16 @@ export default function ShareLinkSheet({ p, open, onClose }: { p: Project; open:
           </>
         ) : (
           <>
-            <button type="button" className="btn btn--primary btn--lg" onClick={send}>
-              📤 傳給朋友
-            </button>
+            <div className="row gap">
+              {isMobile() && (
+                <a className="btn btn--mint btn--lg grow" href={lineShareUrl(`${og ?? `${p.emoji} ${cat.thisOne}的分帳`}\n看你的份、轉完按「我轉了」👉 ${url}`)} target="_blank" rel="noreferrer">
+                  💚 傳到 LINE
+                </a>
+              )}
+              <button type="button" className="btn btn--primary btn--lg grow" onClick={send}>
+                📤 其他方式
+              </button>
+            </div>
             <code className="code-box code-box--wrap">{url}</code>
             <p className="muted small center-text">還有 {daysLeft} 天有效 · 帳本有改會在同步時自動更新</p>
           </>
