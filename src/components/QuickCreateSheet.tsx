@@ -16,7 +16,7 @@ function speechCtor(): (new () => SR) | null {
 }
 
 /** ✨ 一句話開帳本 */
-export default function QuickCreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function QuickCreateSheet({ open, onClose, tripId }: { open: boolean; onClose: () => void; tripId?: string }) {
   const data = useStore((s) => s.data)
   const addProject = useStore((s) => s.addProject)
   const updateProject = useStore((s) => s.updateProject)
@@ -69,7 +69,7 @@ export default function QuickCreateSheet({ open, onClose }: { open: boolean; onC
 
   const create = () => {
     if (!draft) return
-    const p = addProject(undefined, draft.category)
+    const p = addProject(undefined, draft.category, tripId)
     let created: ReturnType<typeof newPerson>[] = []
     updateProject(p.id, (pp) => {
       created = applyDraft(pp, draft, { me: data.me, friends: data.friends, newPerson })

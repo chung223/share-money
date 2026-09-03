@@ -6,7 +6,7 @@
  *   HKDF(secret, 'enc')  -> AES-GCM key that never leaves the device
  * The server only ever sees ciphertext + a version number.
  */
-import type { AppData, Id, Project } from './types'
+import type { AppData, Id, Project, Trip } from './types'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -212,6 +212,27 @@ export function mergeData(local: AppData, remote: AppData, now = Date.now()): Ap
   }
   const projects = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt)
 
+  // trips: same LWW + tombstone rules, keyed `trip:<id>`
+  const tripById = new Map<Id, Trip>()
+  for (const t of [...(remote.trips ?? []), ...(local.trips ?? [])]) {
+    const cur = tripById.get(t.id)
+    if (!cur || (t.updatedAt ?? 0) > (cur.updatedAt ?? 0)) tripById.set(t.id, t)
+    else if (cur && (t.updatedAt ?? 0) === (cur.updatedAt ?? 0) && (local.trips ?? []).includes(t)) tripById.set(t.id, t)
+  }
+  for (const [key, ts] of Object.entries(deleted)) {
+    if (!key.startsWith('trip:')) continue
+    const id = key.slice(5)
+    const t = tripById.get(id)
+    if (t && ts >= (t.updatedAt ?? 0)) tripById.delete(id)
+    else if (t) delete deleted[key]
+  }
+  const trips = [...tripById.values()].sort((a, b) => b.createdAt - a.createdAt)
+  // a member's local share config wins over what came from another device only when the other side has none
+  for (const t of trips) {
+    const l = (local.trips ?? []).find((x) => x.id === t.id)
+    if (l?.share && !t.share) t.share = l.share
+  }
+
   const friends = [...newer.friends]
   for (const f of older.friends) if (!friends.some((x) => x.id === f.id)) friends.push(f)
 
@@ -220,6 +241,7 @@ export function mergeData(local: AppData, remote: AppData, now = Date.now()): Ap
     ...newer,
     projects,
     friends,
+    trips: trips.length ? trips : undefined,
     deleted,
     payInfo: newer.payInfo ?? older.payInfo,
     sync: local.sync ?? remote.sync,

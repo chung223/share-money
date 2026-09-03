@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AppData, Extra, Item, Person, Project, SplitMode } from './lib/types'
+import type { AppData, Extra, Item, Person, Project, SplitMode, Trip } from './lib/types'
 import { PALETTE, PERSON_EMOJIS } from './lib/types'
 import { api, apiBase, applyShareEvents, canon, decryptWithKey, deriveSyncKeys, encryptWithKey, forUpload, generateSecret, mergeData, parseSecret, SyncError, type SyncKeys } from './lib/sync'
 import { buildSnapshot, decryptNote, encryptSnapshot, generateShareKey } from './lib/share'
@@ -96,7 +96,10 @@ interface State {
   setPrefs: (p: Partial<LocalPrefs>) => void
   update: (fn: (d: AppData) => void) => void
   updateProject: (id: string, fn: (p: Project) => void, touch?: boolean) => void
-  addProject: (groupId?: string, category?: Project['category']) => Project
+  addProject: (groupId?: string, category?: Project['category'], tripId?: string) => Project
+  addTrip: (name: string, emoji: string) => Trip
+  updateTrip: (id: string, fn: (t: Trip) => void, touch?: boolean) => void
+  deleteTrip: (id: string, deleteProjects: boolean) => void
   deleteProject: (id: string) => void
   duplicateProject: (id: string) => Project | null
   importData: (data: AppData) => void
@@ -249,9 +252,41 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
-  addProject: (groupId, category) => {
+  addTrip: (name, emoji) => {
+    const now = Date.now()
+    const t: Trip = { id: uid(), name, emoji, createdAt: now, updatedAt: now }
+    get().update((d) => (d.trips = [t, ...(d.trips ?? [])]))
+    return t
+  },
+  updateTrip: (id, fn, touch = true) => {
+    get().update((d) => {
+      const t = d.trips?.find((x) => x.id === id)
+      if (!t) return
+      fn(t)
+      if (touch) t.updatedAt = Date.now()
+    })
+  },
+  deleteTrip: (id, deleteProjects) => {
+    get().update((d) => {
+      d.trips = (d.trips ?? []).filter((t) => t.id !== id)
+      d.deleted = { ...(d.deleted ?? {}), ['trip:' + id]: Date.now() }
+      for (const p of d.projects) {
+        if (p.tripId !== id) continue
+        if (deleteProjects) d.deleted[p.id] = Date.now()
+        else delete p.tripId
+      }
+      if (deleteProjects) d.projects = d.projects.filter((p) => p.tripId !== id)
+    })
+  },
+  addProject: (groupId, category, tripId) => {
     const { data } = get()
     const p = newProject(data.me, data.baseCurrency)
+    if (tripId) {
+      p.tripId = tripId
+      // 同一趟旅程的人自動帶入
+      const seen = new Set<string>([data.me.id])
+      for (const q of data.projects) if (q.tripId === tripId) for (const x of q.people) if (!seen.has(x.id)) { seen.add(x.id); p.people.push(x) }
+    }
     if (category) {
       p.category = category
       p.emoji = categoryOf({ emoji: '', category }).emojis[0]

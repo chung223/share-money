@@ -9,6 +9,10 @@ import { CATEGORIES, categoryOf, modeLabel, type Category } from '../lib/categor
 import BalancesSheet from '../components/BalancesSheet'
 import QuickCreateSheet from '../components/QuickCreateSheet'
 import { useAiAvailable } from '../components/useAiAvailable'
+import { tripSettlement } from '../lib/balances'
+import type { Trip } from '../lib/types'
+
+const NO_TRIPS: Trip[] = []
 
 // zustand selectors must return a stable reference, or React re-renders forever
 const NO_GROUPS: Group[] = []
@@ -79,6 +83,10 @@ export default function Home() {
   }, [projects, base, me])
 
   const groups = useStore((s) => s.data.groups ?? NO_GROUPS)
+  const trips = useStore((s) => s.data.trips ?? NO_TRIPS)
+  const addTrip = useStore((s) => s.addTrip)
+  const [newTrip, setNewTrip] = useState(false)
+  const [tripName, setTripName] = useState('')
   const [pick, setPick] = useState(false)
   const [filter, setFilter] = useState<Category | 'all'>('all')
   const [balances, setBalances] = useState(false)
@@ -90,8 +98,9 @@ export default function Home() {
     navigate(`/p/${p.id}`)
   }
   const onCreate = () => setPick(true)
-  const usedCats = useMemo(() => new Set(projects.map((p) => categoryOf(p).id)), [projects])
-  const shown = filter === 'all' ? projects : projects.filter((p) => categoryOf(p).id === filter)
+  const usedCats = useMemo(() => new Set(projects.filter((p) => !p.tripId).map((p) => categoryOf(p).id)), [projects])
+  const loose = projects.filter((p) => !p.tripId || !trips.some((t) => t.id === p.tripId))
+  const shown = filter === 'all' ? loose : loose.filter((p) => categoryOf(p).id === filter)
 
   return (
     <div className="page">
@@ -134,6 +143,13 @@ export default function Home() {
           </Empty>
         ) : (
           <>
+            {trips.length > 0 && (
+              <div className="stack-s">
+                {trips.map((t) => (
+                  <TripCard key={t.id} t={t} projects={projects} base={base} />
+                ))}
+              </div>
+            )}
             {usedCats.size > 1 && (
               <div className="chip-row">
                 <button type="button" className={`chip chip--xs ${filter === 'all' ? 'is-on' : ''}`} onClick={() => setFilter('all')}>
@@ -160,6 +176,24 @@ export default function Home() {
       )}
 
       <BalancesSheet open={balances} onClose={() => setBalances(false)} />
+      <Sheet open={newTrip} onClose={() => setNewTrip(false)} title="🧳 開一趟旅程">
+        <div className="stack">
+          <input className="input" placeholder="例：沖繩三天兩夜" value={tripName} autoFocus onChange={(e) => setTripName(e.target.value)} />
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={!tripName.trim()}
+            onClick={() => {
+              const t = addTrip(tripName.trim(), '🧳')
+              setNewTrip(false)
+              setTripName('')
+              navigate(`/t/${t.id}`)
+            }}
+          >
+            建立
+          </button>
+        </div>
+      </Sheet>
       <QuickCreateSheet open={quick} onClose={() => setQuick(false)} />
       <Sheet open={pick} onClose={() => setPick(false)} title="開新帳本">
         <div className="stack">
@@ -168,6 +202,9 @@ export default function Home() {
               ✨ 說一句話，AI 幫你開
             </button>
           )}
+          <button type="button" className="btn btn--ghost" onClick={() => { setPick(false); setNewTrip(true) }}>
+            🧳 開一趟旅程（裝很多本帳，一起結算）
+          </button>
           <div className="label">{ai ? '或自己選分類' : '這次是什麼？'}</div>
           <div className="cat-grid">
             {CATEGORIES.map((c) => (
@@ -196,5 +233,40 @@ export default function Home() {
         </div>
       </Sheet>
     </div>
+  )
+}
+
+function TripCard({ t, projects, base }: { t: Trip; projects: Project[]; base: string }) {
+  const mine = projects.filter((p) => p.tripId === t.id)
+  const s = useMemo(() => tripSettlement(mine, base), [mine, base])
+  const open = s.transfers.length
+  return (
+    <button type="button" className={`card project-card trip-card ${open === 0 && mine.length ? 'is-done' : ''}`} onClick={() => navigate(`/t/${t.id}`)}>
+      <div className="project-card__emoji">{t.emoji}</div>
+      <div className="project-card__body">
+        <div className="project-card__name">{t.name || '未命名旅程'}</div>
+        <div className="project-card__meta">
+          <span>🧳 旅程</span>
+          <span className="dot">·</span>
+          <span>{mine.length} 本帳</span>
+          {t.share && (
+            <>
+              <span className="dot">·</span>
+              <span>👥 共編</span>
+            </>
+          )}
+        </div>
+        <div className="project-card__people">
+          {s.people.slice(0, 6).map((x) => (
+            <span key={x.id} className={`mini-avatar c-${x.color}`}>
+              {x.emoji}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="project-card__right">
+        <div className={`pill ${open ? 'pill--pink' : 'pill--mint'}`}>{mine.length === 0 ? '空的' : open ? `還差 ${open} 筆轉帳` : '✓ 結清'}</div>
+      </div>
+    </button>
   )
 }

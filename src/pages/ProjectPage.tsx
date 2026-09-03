@@ -123,9 +123,10 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   return (
     <div className="page page--with-bar">
       <header className="topbar">
-        <button type="button" className="icon-btn" onClick={() => navigate('/')} aria-label="返回">
+        <button type="button" className="icon-btn" onClick={() => navigate(p.tripId && data.trips?.some((t) => t.id === p.tripId) ? `/t/${p.tripId}` : '/')} aria-label="返回">
           ←
         </button>
+        {p.tripId && data.trips?.some((t) => t.id === p.tripId) && <span className="muted small">🧳 {data.trips.find((t) => t.id === p.tripId)!.name}</span>}
         <div className="grow" />
         <button type="button" className="icon-btn" onClick={() => setMenuOpen(true)} aria-label="更多">
           ⋯
@@ -435,6 +436,21 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
           >
             ↩️ 重設收款狀態
           </button>
+          {(data.trips?.length ?? 0) > 0 && (
+            <>
+              <div className="label">🧳 屬於哪趟旅程</div>
+              <div className="chip-row">
+                <button type="button" className={`chip chip--xs ${!p.tripId ? 'is-on' : ''}`} onClick={() => set((pp) => delete pp.tripId)}>
+                  不屬於旅程
+                </button>
+                {data.trips!.map((t) => (
+                  <button key={t.id} type="button" className={`chip chip--xs ${p.tripId === t.id ? 'is-on' : ''}`} onClick={() => set((pp) => (pp.tripId = t.id))}>
+                    {t.emoji} {t.name}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           {!confirmDelete ? (
             <button type="button" className="btn btn--ghost btn--danger-text" onClick={() => setConfirmDelete(true)}>
               🗑 刪除這個帳本

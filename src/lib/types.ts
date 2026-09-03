@@ -37,10 +37,37 @@ export interface Payment {
   amount: number
 }
 
+/** 旅程：把一趟出遊的多本帳（各自分類）包在一起，跨本結算、共編。 */
+export interface Trip {
+  id: Id
+  name: string
+  emoji: string
+  createdAt: number
+  updatedAt: number
+  note?: string
+  /** 共編（第二階段）：連結裡的金鑰、伺服器版本等 */
+  share?: TripShare
+}
+export interface TripShare {
+  id: string
+  /** base64url 32 bytes；派生 auth token 與加密金鑰 */
+  secret: string
+  role: 'owner' | 'member'
+  /** 已知的伺服器版本 */
+  version: number
+  /** 上次成功推送時的本地內容指紋（避免重複推） */
+  pushedHash?: string
+  /** 成員在這趟裡對應的 person id（成員自己的 me.id 與旅程內的人不同） */
+  myPersonId?: Id
+  joinedAt: number
+}
+
 export interface Project {
   id: Id
   name: string
   emoji: string
+  /** 屬於哪趟旅程（可無） */
+  tripId?: Id
   /** 吃飯 / 交通 / 購物 / 旅遊 / 娛樂 / 其他；缺省時由 emoji 推測（見 lib/category.ts）。 */
   category?: 'food' | 'transport' | 'shopping' | 'travel' | 'fun' | 'other'
   date: string // YYYY-MM-DD
@@ -127,13 +154,14 @@ export interface AppData {
   me: Person
   friends: Person[]
   groups?: Group[]
+  trips?: Trip[]
   projects: Project[]
   baseCurrency: string
   payInfo?: PayInfo
   /** 使用者自帶的 AI（BYOK）。金鑰存在這裡 = 有 PIN 就跟著加密、同步時端對端加密。 */
   aiProvider?: { format: 'openai' | 'anthropic'; baseUrl: string; model: string; apiKey: string; preset?: string }
   sync?: SyncConfig
-  /** Tombstones: projectId -> deletion time, so a delete wins over a stale copy on another device. */
+  /** Tombstones: projectId (or `trip:<id>`) -> deletion time, so a delete wins over a stale copy on another device. */
   deleted?: Record<Id, number>
   /** Bumped on every change; used to pick the newer side for scalar fields when merging. */
   updatedAt?: number
