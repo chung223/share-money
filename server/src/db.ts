@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS account_flags (
   note TEXT,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS trips (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0,
+  cipher TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ai_usage (
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   day TEXT NOT NULL,

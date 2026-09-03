@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { navigate } from '../router'
 import { CATEGORIES, categoryOf, modeLabel } from '../lib/category'
@@ -25,6 +25,11 @@ export default function TripPage({ id }: { id: string }) {
   const addProject = useStore((s) => s.addProject)
   const showToast = useStore((s) => s.showToast)
   const ai = useAiAvailable()
+  const syncTrip = useStore((s) => s.syncTrip)
+  useEffect(() => {
+    if (trip?.share) syncTrip(id, { quiet: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, !!trip?.share])
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [quick, setQuick] = useState(false)

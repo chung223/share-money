@@ -1,10 +1,11 @@
 import { create } from 'zustand'
-import type { AppData, Extra, Item, Person, Project, SplitMode, Trip } from './lib/types'
+import type { AppData, Extra, Id, Item, Person, Project, SplitMode, Trip } from './lib/types'
 import { PALETTE, PERSON_EMOJIS } from './lib/types'
 import { api, apiBase, applyShareEvents, canon, decryptWithKey, deriveSyncKeys, encryptWithKey, forUpload, generateSecret, mergeData, parseSecret, SyncError, type SyncKeys } from './lib/sync'
 import { buildSnapshot, decryptNote, encryptSnapshot, generateShareKey } from './lib/share'
 import { clearSyncMeta, loadSyncMeta, saveSyncMeta } from './lib/syncMeta'
 import { categoryOf } from './lib/category'
+import { buildBundle, bundleHash, decryptBundle, deriveTripKeys, encryptBundle, generateTripSecret, mergeBundle, tripApi, type TripBundle } from './lib/tripSync'
 import {
   createPinSession,
   loadPlain,
@@ -100,6 +101,12 @@ interface State {
   addTrip: (name: string, emoji: string) => Trip
   updateTrip: (id: string, fn: (t: Trip) => void, touch?: boolean) => void
   deleteTrip: (id: string, deleteProjects: boolean) => void
+  shareTrip: (id: string) => Promise<string>
+  stopSharingTrip: (id: string, deleteRemote: boolean) => Promise<void>
+  syncTrip: (id: string, opts?: { quiet?: boolean }) => Promise<void>
+  syncTrips: () => Promise<void>
+  previewTrip: (id: string, secret: string) => Promise<TripBundle>
+  joinTrip: (id: string, secret: string, myPersonId: Id | null, newSelf: boolean) => Promise<string>
   deleteProject: (id: string) => void
   duplicateProject: (id: string) => Project | null
   importData: (data: AppData) => void
@@ -138,11 +145,17 @@ function keysFor(secret: string) {
   }
   return k
 }
+let tripTimer: ReturnType<typeof setTimeout> | null = null
 function markDirty(get: () => State) {
   changeSeq += 1
   const meta = loadSyncMeta()
   saveSyncMeta({ ...meta, dirty: true })
   const s = get()
+  // 共編旅程不需要帳號同步也要推
+  if ((s.data.trips ?? []).some((t) => t.share)) {
+    if (tripTimer) clearTimeout(tripTimer)
+    tripTimer = setTimeout(() => get().syncTrips().catch(() => {}), 2500)
+  }
   if (!s.data.sync || s.sync.status === 'off') return
   if (!s.sync.dirty) useStore.setState({ sync: { ...s.sync, dirty: true } })
   if (pushTimer) clearTimeout(pushTimer)
@@ -185,7 +198,7 @@ export const useStore = create<State>((set, get) => ({
     if (data.sync) {
       set({ sync: { ...get().sync, status: 'idle' } })
       get().syncNow({ quiet: true })
-    }
+    } else get().syncTrips().catch(() => {})
   },
 
   unlock: async (pin) => {
@@ -346,6 +359,126 @@ export const useStore = create<State>((set, get) => ({
     }, 2200)
   },
 
+  // ---------------- shared trips ----------------
+
+  shareTrip: async (id) => {
+    const t = get().data.trips?.find((x) => x.id === id)
+    if (!t) throw new Error('旅程不見了')
+    if (t.share) return t.share.secret
+    const secret = generateTripSecret()
+    const keys = await deriveTripKeys(secret)
+    const r = await tripApi.create('', keys.token)
+    get().updateTrip(id, (tt) => (tt.share = { id: r.id, secret, role: 'owner', version: 0, joinedAt: Date.now(), myPersonId: get().data.me.id }), false)
+    await get().syncTrip(id, { quiet: true })
+    return secret
+  },
+
+  stopSharingTrip: async (id, deleteRemote) => {
+    const t = get().data.trips?.find((x) => x.id === id)
+    if (!t?.share) return
+    if (deleteRemote) {
+      const keys = await deriveTripKeys(t.share.secret)
+      await tripApi.remove('', keys.token, t.share.id).catch(() => {})
+    }
+    get().updateTrip(id, (tt) => delete tt.share, false)
+  },
+
+  syncTrip: async (id, { quiet = true } = {}) => {
+    const s0 = get()
+    const t = s0.data.trips?.find((x) => x.id === id)
+    if (!t?.share || s0.locked) return
+    const share = t.share
+    try {
+      const keys = await deriveTripKeys(share.secret)
+      let remote = await tripApi.get('', keys.token, share.id)
+      if (!remote) {
+        // 擁有者刪了共編：成員這邊改成本地旅程
+        get().updateTrip(id, (tt) => delete tt.share, false)
+        if (!quiet) get().showToast('這趟旅程的共編已經被關閉，改為只在本機', '🔒')
+        return
+      }
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (get().locked) return
+        let data = get().data
+        let changed = false
+        if (remote.cipher && remote.version !== share.version) {
+          let bundle: TripBundle
+          try {
+            bundle = await decryptBundle(keys.key, remote.cipher)
+          } catch {
+            throw new Error('旅程金鑰對不上')
+          }
+          data = mergeBundle(data, id, bundle)
+          changed = true
+        }
+        const mine = buildBundle(data, id)
+        if (!mine) return
+        const hash = bundleHash(mine)
+        const cur = data.trips!.find((x) => x.id === id)!
+        if (changed) {
+          set({ data })
+          scheduleSave(get)
+        }
+        const needPush = !remote.cipher || hash !== (cur.share?.pushedHash ?? '')
+        if (needPush) {
+          const r = await tripApi.put('', keys.token, share.id, remote.version, await encryptBundle(keys.key, mine))
+          if (!r.ok) {
+            remote = { version: r.version, cipher: r.cipher }
+            continue
+          }
+          get().updateTrip(id, (tt) => tt.share && Object.assign(tt.share, { version: r.version, pushedHash: hash }), false)
+        } else get().updateTrip(id, (tt) => tt.share && Object.assign(tt.share, { version: remote!.version, pushedHash: hash }), false)
+        break
+      }
+    } catch (e) {
+      if (!quiet) get().showToast(e instanceof Error ? e.message : '旅程同步失敗', '😵')
+    }
+  },
+
+  syncTrips: async () => {
+    for (const t of get().data.trips ?? []) if (t.share) await get().syncTrip(t.id, { quiet: true })
+  },
+
+  previewTrip: async (id, secret) => {
+    const keys = await deriveTripKeys(secret)
+    const remote = await tripApi.get('', keys.token, id)
+    if (!remote) throw new Error('找不到這趟旅程，連結可能失效了')
+    if (!remote.cipher) throw new Error('這趟旅程還沒有內容')
+    try {
+      return await decryptBundle(keys.key, remote.cipher)
+    } catch {
+      throw new Error('金鑰對不上，請確認連結完整')
+    }
+  },
+
+  joinTrip: async (id, secret, myPersonId, newSelf) => {
+    const bundle = await get().previewTrip(id, secret)
+    const s = get()
+    if (s.data.trips?.some((t) => t.id === bundle.trip.id)) {
+      // 已經有了（例如是自己另一台裝置）：只補 share
+      get().updateTrip(bundle.trip.id, (tt) => (tt.share ??= { id, secret, role: 'member', version: 0, joinedAt: Date.now(), myPersonId: myPersonId ?? s.data.me.id }), false)
+    } else {
+      let personId = myPersonId
+      const me = s.data.me
+      get().update((d) => {
+        d.trips = [{ ...bundle.trip, share: { id, secret, role: 'member', version: 0, joinedAt: Date.now() } }, ...(d.trips ?? [])]
+        for (const p of bundle.projects) if (!d.projects.some((x) => x.id === p.id)) d.projects.push({ ...p, tripId: bundle.trip.id })
+        if (newSelf || !personId) {
+          // 我不在名單：用自己的 me 加進每本帳
+          for (const p of d.projects) if (p.tripId === bundle.trip.id && !p.people.some((x) => x.id === me.id)) p.people.push(me)
+          personId = me.id
+        }
+        const t = d.trips.find((x) => x.id === bundle.trip.id)!
+        t.share!.myPersonId = personId
+        // 同行的人存成常用朋友
+        const seen = new Set(d.friends.map((f) => f.id))
+        for (const p of bundle.projects) for (const x of p.people) if (x.id !== personId && x.id !== me.id && !seen.has(x.id)) { seen.add(x.id); d.friends.push(x) }
+      })
+    }
+    await get().syncTrip(bundle.trip.id, { quiet: true })
+    return bundle.trip.id
+  },
+
   // ---------------- sync ----------------
 
   enableSync: async (secretIn) => {
@@ -487,6 +620,7 @@ export const useStore = create<State>((set, get) => ({
       }
 
       set({ sync: { status: 'idle', lastSyncAt: meta.lastSyncAt, error: null, dirty: meta.dirty } })
+      get().syncTrips().catch(() => {})
       if (toastMsg) get().showToast(toastMsg, '💸')
       else if (!quiet) get().showToast('同步完成', '☁️')
     } catch (e) {
@@ -536,6 +670,7 @@ if (typeof document !== 'undefined') {
     if (document.visibilityState === 'visible') {
       const s = useStore.getState()
       if (s.data.sync && !s.locked && s.ready) s.syncNow({ quiet: true })
+      else if (!s.locked && s.ready) s.syncTrips().catch(() => {})
     }
   })
 }

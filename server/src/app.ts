@@ -57,6 +57,7 @@ const RATE_LIMITED = Symbol('rate_limited')
 const NOTE_MAX = 2000 // encrypted JSON, so a bit more than the 200-char plaintext
 const LABEL_MAX = 40
 const OG_TITLE_MAX = 60
+const TRIP_MAX_BYTES = 4 * 1024 * 1024
 const OG_DESC = '點開看自己的份，轉完按「我轉了」就好 💸'
 
 function escHtml(s: string) {
@@ -127,6 +128,13 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     ackEvent: db.raw.prepare('UPDATE share_events SET acked = 1 WHERE id = ? AND share_id IN (SELECT id FROM shares WHERE account_id = ?)'),
     purgeExpired: db.raw.prepare('DELETE FROM shares WHERE expires_at < ?'),
     purgeInactive: db.raw.prepare('DELETE FROM accounts WHERE last_seen_at < ?'),
+    tripInsert: db.raw.prepare('INSERT INTO trips (id, token_hash, version, cipher, created_at, updated_at, last_seen_at) VALUES (?, ?, 0, NULL, ?, ?, ?)'),
+    tripGet: db.raw.prepare('SELECT id, token_hash, version, cipher, updated_at FROM trips WHERE id = ?'),
+    tripTouch: db.raw.prepare('UPDATE trips SET last_seen_at = ? WHERE id = ?'),
+    tripPut: db.raw.prepare('UPDATE trips SET version = ?, cipher = ?, updated_at = ?, last_seen_at = ? WHERE id = ?'),
+    tripDelete: db.raw.prepare('DELETE FROM trips WHERE id = ?'),
+    tripPurge: db.raw.prepare('DELETE FROM trips WHERE last_seen_at < ?'),
+    tripCount: db.raw.prepare('SELECT COUNT(*) AS n FROM trips'),
     aiFlag: db.raw.prepare('SELECT ai_allowed, note FROM account_flags WHERE account_id = ?'),
     setAiFlag: db.raw.prepare('INSERT INTO account_flags (account_id, ai_allowed, note, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET ai_allowed = excluded.ai_allowed, note = COALESCE(excluded.note, account_flags.note), updated_at = excluded.updated_at'),
     aiUsed: db.raw.prepare('SELECT n FROM ai_usage WHERE account_id = ? AND day = ?'),
@@ -151,7 +159,8 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
         (SELECT COUNT(*) FROM shares WHERE expires_at > ?) AS shares_live,
         (SELECT COUNT(*) FROM share_events) AS events,
         (SELECT COUNT(*) FROM share_events WHERE acked = 0) AS events_pending,
-        (SELECT COUNT(*) FROM push_subs) AS push_subs`,
+        (SELECT COUNT(*) FROM push_subs) AS push_subs,
+        (SELECT COUNT(*) FROM trips) AS trips`,
     ),
   }
   const publicLimiter = makeLimiter(60, 60_000, now)
@@ -507,6 +516,52 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     return c.json({ ok: true })
   })
 
+  // --- 共編旅程：拿到連結（id + 金鑰）的人都能讀寫；伺服器只存密文與版本號。token = HKDF(金鑰) 派生，伺服器存 hash ---
+  const tripCreateLimiter = makeLimiter(20, 3_600_000, now)
+  const tripToken = (c: import('hono').Context<{ Variables: Vars }>) => {
+    const m = /^Bearer\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')
+    return m && TOKEN_RE.test(m[1]) ? m[1] : null
+  }
+  const tripAuth = (c: import('hono').Context<{ Variables: Vars }>, id: string) => {
+    const tok = tripToken(c)
+    if (!tok || !ID_RE.test(id)) return null
+    const row = q.tripGet.get(id) as { id: string; token_hash: string; version: number; cipher: string | null; updated_at: number } | undefined
+    if (!row || row.token_hash !== hashToken(tok)) return null
+    q.tripTouch.run(now(), id)
+    return row
+  }
+  app.post('/api/trip', (c) => {
+    const tok = tripToken(c)
+    if (!tok) return c.json({ error: 'unauthorized' }, 401)
+    if (!tripCreateLimiter(clientIp(c.req.raw.headers))) return c.json({ error: 'rate_limited' }, 429)
+    const id = newId(9)
+    const t = now()
+    q.tripInsert.run(id, hashToken(tok), t, t, t)
+    return c.json({ id, version: 0 })
+  })
+  app.get('/api/trip/:id', (c) => {
+    const row = tripAuth(c, c.req.param('id'))
+    if (!row) return c.json({ error: 'not_found' }, 404)
+    return c.json({ id: row.id, version: row.version, cipher: row.cipher, updatedAt: row.updated_at })
+  })
+  app.put('/api/trip/:id', async (c) => {
+    const row = tripAuth(c, c.req.param('id'))
+    if (!row) return c.json({ error: 'not_found' }, 404)
+    const body = await c.req.json().catch(() => null)
+    if (!body || typeof body.cipher !== 'string' || !Number.isInteger(body.baseVersion)) return c.json({ error: 'bad_request' }, 400)
+    if (body.cipher.length > TRIP_MAX_BYTES) return c.json({ error: 'too_large' }, 413)
+    if (body.baseVersion !== row.version) return c.json({ error: 'conflict', version: row.version, cipher: row.cipher, updatedAt: row.updated_at }, 409)
+    const t = now()
+    q.tripPut.run(row.version + 1, body.cipher, t, t, row.id)
+    return c.json({ version: row.version + 1, updatedAt: t })
+  })
+  app.delete('/api/trip/:id', (c) => {
+    const row = tripAuth(c, c.req.param('id'))
+    if (!row) return c.json({ error: 'not_found' }, 404)
+    q.tripDelete.run(row.id)
+    return c.json({ ok: true })
+  })
+
   // --- web push ---
   const notifyOwner = (accountId: string, body: string) => {
     if (!push) return
@@ -560,6 +615,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
   const purgeExpired = () => q.purgeExpired.run(now() - 7 * 86_400_000)
   const purgeInactive = () => {
     const r = q.purgeInactive.run(now() - inactiveDays * 86_400_000)
+    q.tripPurge.run(now() - inactiveDays * 86_400_000)
     return Number(r.changes)
   }
   return { app, purgeExpired, purgeInactive }
