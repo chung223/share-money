@@ -97,6 +97,8 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 
 ## 第三階段：智慧匯入
 
+- ✅ 2026-09-03 伺服器端 AI 收據辨識 `POST /api/parse`（`server/src/ai.ts`，MiniMax OpenAI 相容 API：文字 M2.5、圖片 M3；每帳號每日 `AI_DAILY_QUOTA` 次）。前端圖片／PDF／貼上文字都可切 AI；`src/lib/pdf.ts` 用 pdfjs 抽文字層或轉圖。
+
 - LINE bot 收到收據照片 → 伺服器呼叫視覺模型解析品項 → 建立帳本 → 回傳連結。
 - 伺服器端收據辨識取代 Tesseract（準確度大幅提升，還能判斷主餐 / 共享）。
 - 財政部電子發票 API：用手機條碼載具自動匯入發票（需申請 AppID）。

@@ -131,6 +131,7 @@ async function req(base: string, path: string, init: RequestInit & { token?: str
 }
 
 export const api = {
+  raw: req,
   async get(base: string, token: string): Promise<RemoteState> {
     const r = await req(base, '/api/sync', { token })
     if (!r.ok) throw new SyncError('server', `HTTP ${r.status}`)

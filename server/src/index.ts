@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { openDb } from './db.ts'
 import { createApp, type PushSender } from './app.ts'
 import webpush from 'web-push'
+import { createAiParser } from './ai.ts'
 
 const PORT = Number(process.env.PORT ?? 3456)
 const DATA_DIR = process.env.DATA_DIR ?? join(import.meta.dirname, '..', 'data')
@@ -11,6 +12,9 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || undefined
 const INACTIVE_DAYS = Number(process.env.INACTIVE_DAYS ?? 180)
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN ?? CORS_ORIGIN ?? `http://127.0.0.1:${PORT}`
 const SHARE_HTML = process.env.SHARE_HTML ?? join(import.meta.dirname, '..', '..', 'dist', 's', 'index.html')
+
+const ai = createAiParser({ apiKey: process.env.MINIMAX_API_KEY, baseUrl: process.env.MINIMAX_BASE_URL, model: process.env.MINIMAX_MODEL, visionModel: process.env.MINIMAX_VISION_MODEL })
+if (!ai.enabled) console.warn('MINIMAX_API_KEY not set: AI receipt parsing disabled')
 
 let push: PushSender | undefined
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
@@ -32,7 +36,7 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
 } else console.warn('VAPID keys not set: push disabled')
 
 const db = openDb(join(DATA_DIR, 'banban.db'))
-const { app, purgeExpired, purgeInactive } = createApp({ db, corsOrigin: CORS_ORIGIN, adminToken: ADMIN_TOKEN, inactiveDays: INACTIVE_DAYS, push, publicOrigin: PUBLIC_ORIGIN, shareHtml: SHARE_HTML })
+const { app, purgeExpired, purgeInactive } = createApp({ db, corsOrigin: CORS_ORIGIN, adminToken: ADMIN_TOKEN, inactiveDays: INACTIVE_DAYS, push, publicOrigin: PUBLIC_ORIGIN, shareHtml: SHARE_HTML, ai, aiDailyQuota: Number(process.env.AI_DAILY_QUOTA ?? 40) })
 
 // 每小時：清過期一週以上的分享連結；刪 INACTIVE_DAYS 天沒同步的帳號（連同資料與分享）
 const housekeeping = () => {

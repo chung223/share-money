@@ -3,12 +3,27 @@ import jsQR from 'jsqr'
 import { decodeQrBytes, mergeEInvoice, parseEInvoice, type EInvoiceLeft, type EInvoiceRight } from '../lib/einvoice'
 import { parseReceiptText, type ParsedRow } from '../lib/receiptText'
 import { MoneyInput, Segmented, Sheet } from './ui'
+import { isPdf, pdfFirstPageToCanvas, pdfToText } from '../lib/pdf'
+import { aiAvailable, aiParse, canvasToJpegBase64 } from '../lib/ai'
+import { useStore } from '../store'
 
 export interface ImportResult {
   rows: { name: string; qty: number; price: number }[]
   total: number | null
   date: string | null
-  source: 'qr' | 'ocr' | 'text'
+  source: 'qr' | 'ocr' | 'text' | 'pdf' | 'ai'
+  /** 服務費、外送費、折扣（負數）等，會進「額外費用」 */
+  extras?: { name: string; amount: number }[]
+  currency?: string | null
+  dropped?: number
+}
+
+function useAi() {
+  const [ai, setAi] = useState(false)
+  useEffect(() => {
+    aiAvailable().then(setAi)
+  }, [])
+  return ai
 }
 
 type Tab = 'qr' | 'photo' | 'text'
@@ -39,7 +54,7 @@ export default function ImportSheet({ open, onClose, onImport }: { open: boolean
             onChange={setTab}
             options={[
               { value: 'qr', label: '🧾 發票 QR' },
-              { value: 'photo', label: '📷 拍照辨識' },
+              { value: 'photo', label: '📷 圖片 / PDF' },
               { value: 'text', label: '📋 貼上文字' },
             ]}
           />
@@ -201,12 +216,50 @@ function QrScanner({ onDone }: { onDone: (r: ImportResult) => void }) {
 /* ---------------- Photo OCR ---------------- */
 
 function PhotoOcr({ onDone }: { onDone: (r: ImportResult) => void }) {
+  const camRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
   const [status, setStatus] = useState('')
   const [preview, setPreview] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const ai = useAi()
+  const [useAiMode, setUseAiMode] = useState(() => localStorage.getItem('banban:aiOcr') !== '0')
+  const showToast = useStore((s) => s.showToast)
+
+  const ocrCanvas = async (canvas: HTMLCanvasElement) => {
+    const { createWorker } = await import('tesseract.js')
+    const worker = await createWorker(['chi_tra', 'eng'], 1, {
+      logger: (m: { status: string; progress: number }) => {
+        setStatus(m.status === 'recognizing text' ? '辨識中…' : m.status.includes('loading') || m.status.includes('download') ? '下載辨識模型（第一次會久一點）…' : m.status)
+        setProgress(Math.round((m.progress ?? 0) * 100))
+      },
+    })
+    await worker.setParameters({ preserve_interword_spaces: '1' })
+    const { data } = await worker.recognize(canvas)
+    await worker.terminate()
+    return data.text
+  }
+
+  const finishText = (text: string, source: ImportResult['source']) => {
+    const parsed = parseReceiptText(text)
+    if (!parsed.rows.length) {
+      setErr('沒抓到任何品項。光線好一點、拍正一點會更準；或改用「貼上文字」。' + (ai && !useAiMode ? ' 也可以打開 AI 辨識試試。' : ''))
+      return
+    }
+    onDone({ rows: parsed.rows.map(({ name, qty, price }) => ({ name, qty, price })), total: parsed.total, date: parsed.date, source, dropped: parsed.dropped })
+  }
+  const finishAi = async (input: { text?: string; image?: { mediaType: string; base64: string } }) => {
+    setStatus('AI 整理中…')
+    setProgress(60)
+    const r = await aiParse(input)
+    if (!r.items.length) {
+      setErr('AI 沒看出品項，換張清楚一點的圖或改用貼上文字。')
+      return
+    }
+    onDone({ rows: r.items, total: r.total, date: r.date, source: 'ai', extras: r.extras, currency: r.currency })
+    if (r.remaining <= 5) showToast(`今天 AI 額度剩 ${r.remaining} 次`, '✨')
+  }
 
   const run = async (f: File | undefined) => {
     if (!f) return
@@ -214,27 +267,26 @@ function PhotoOcr({ onDone }: { onDone: (r: ImportResult) => void }) {
     setBusy(true)
     setProgress(0)
     setStatus('準備中…')
-    setPreview(URL.createObjectURL(f))
+    setPreview(isPdf(f) ? null : URL.createObjectURL(f))
     try {
-      const { createWorker } = await import('tesseract.js')
-      const worker = await createWorker(['chi_tra', 'eng'], 1, {
-        logger: (m: { status: string; progress: number }) => {
-          setStatus(
-            m.status === 'recognizing text' ? '辨識中…' : m.status.includes('loading') || m.status.includes('download') ? '下載辨識模型（第一次會久一點）…' : m.status,
-          )
-          setProgress(Math.round((m.progress ?? 0) * 100))
-        },
-      })
-      await worker.setParameters({ preserve_interword_spaces: '1' })
-      const img = await downscale(f, 1800)
-      const { data } = await worker.recognize(img)
-      await worker.terminate()
-      const parsed = parseReceiptText(data.text)
-      if (!parsed.rows.length) {
-        setErr('沒抓到任何品項。光線好一點、拍正一點會更準；或改用「貼上文字」。')
+      if (isPdf(f)) {
+        setStatus('讀取 PDF…')
+        const text = await pdfToText(f)
+        if (text.replace(/\s/g, '').length > 30) {
+          if (ai && useAiMode) await finishAi({ text })
+          else finishText(text, 'pdf')
+          return
+        }
+        // scanned PDF: rasterise page 1
+        const canvas = await pdfFirstPageToCanvas(f)
+        setPreview(canvas.toDataURL('image/jpeg', 0.7))
+        if (ai && useAiMode) await finishAi({ image: { mediaType: 'image/jpeg', base64: canvasToJpegBase64(canvas) } })
+        else finishText(await ocrCanvas(canvas), 'ocr')
         return
       }
-      onDone({ rows: parsed.rows.map(({ name, qty, price }) => ({ name, qty, price })), total: parsed.total, date: parsed.date, source: 'ocr' })
+      const canvas = await downscale(f, ai && useAiMode ? 1600 : 1800)
+      if (ai && useAiMode) await finishAi({ image: { mediaType: 'image/jpeg', base64: canvasToJpegBase64(canvas) } })
+      else finishText(await ocrCanvas(canvas), 'ocr')
     } catch (e) {
       setErr('辨識失敗：' + (e instanceof Error ? e.message : '未知錯誤'))
     } finally {
@@ -245,7 +297,7 @@ function PhotoOcr({ onDone }: { onDone: (r: ImportResult) => void }) {
   return (
     <div className="stack">
       <div className="ocr-box">
-        {preview ? <img src={preview} alt="" className="ocr-box__img" /> : <div className="ocr-box__hint">📷 拍下收據、電子明細截圖，或從相簿選</div>}
+        {preview ? <img src={preview} alt="" className="ocr-box__img" /> : <div className="ocr-box__hint">📷 拍收據、電子明細截圖，或從相簿 / 檔案選（支援 PDF）</div>}
         {busy && (
           <div className="ocr-box__overlay">
             <div className="spinner" />
@@ -257,12 +309,29 @@ function PhotoOcr({ onDone }: { onDone: (r: ImportResult) => void }) {
         )}
       </div>
       {err && <p className="small danger-text center-text">{err}</p>}
-      <p className="muted small center-text">辨識在你的手機裡完成，照片不會上傳。辨識完可以再手動修正。</p>
+      {ai && (
+        <label className="row gap-s center small">
+          <input
+            type="checkbox"
+            checked={useAiMode}
+            onChange={(e) => {
+              setUseAiMode(e.target.checked)
+              localStorage.setItem('banban:aiOcr', e.target.checked ? '1' : '0')
+            }}
+          />
+          ✨ 用 AI 辨識（準很多，會把圖傳到伺服器處理、不儲存）
+        </label>
+      )}
+      <p className="muted small center-text">{ai && useAiMode ? '圖片只用來辨識，處理完即丟。' : '辨識在你的手機裡完成，照片不會上傳。'}辨識完可以再手動修正。</p>
       <div className="row gap">
-        <button type="button" className="btn btn--primary grow" disabled={busy} onClick={() => fileRef.current?.click()}>
-          {preview ? '再拍一張' : '📷 拍照 / 選圖片'}
+        <button type="button" className="btn btn--primary grow" disabled={busy} onClick={() => camRef.current?.click()}>
+          📷 拍照
         </button>
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => run(e.target.files?.[0])} />
+        <button type="button" className="btn btn--mint grow" disabled={busy} onClick={() => fileRef.current?.click()}>
+          🖼 相簿 / 檔案
+        </button>
+        <input ref={camRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { run(e.target.files?.[0]); e.target.value = '' }} />
+        <input ref={fileRef} type="file" accept="image/*,application/pdf,.pdf" hidden onChange={(e) => { run(e.target.files?.[0]); e.target.value = '' }} />
       </div>
     </div>
   )
@@ -283,28 +352,52 @@ async function downscale(f: File, max: number): Promise<HTMLCanvasElement> {
 
 function PasteText({ onDone }: { onDone: (r: ImportResult) => void }) {
   const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const ai = useAi()
+  const showToast = useStore((s) => s.showToast)
   const parsed = parseReceiptText(text)
+  const runAi = async () => {
+    setBusy(true)
+    try {
+      const r = await aiParse({ text })
+      if (!r.items.length) return showToast('AI 沒看出品項', '🤔')
+      onDone({ rows: r.items, total: r.total, date: r.date, source: 'ai', extras: r.extras, currency: r.currency })
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'AI 失敗', '😵')
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <div className="stack">
       <textarea
         className="input textarea"
         rows={8}
-        placeholder={'一行一個品項，最後放金額，例如：\n味噌拉麵 180\n煎餃 x2 120\n可樂 30'}
+        placeholder={'整段貼上就好，會自動過濾掉電話、發票號碼、找零這些雜訊。例如：\n味噌拉麵 180\n煎餃 x2 120\n可樂 30'}
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
       <p className="muted small">
-        {parsed.rows.length ? `抓到 ${parsed.rows.length} 項` : '也可以直接貼 Uber Eats、foodpanda 的訂單文字'}
+        {parsed.rows.length ? `抓到 ${parsed.rows.length} 項` : '也可以直接貼 Uber Eats、foodpanda、Email 收據的整段文字'}
         {parsed.total != null ? `，總計 ${parsed.total}` : ''}
+        {parsed.dropped > 0 ? `，過濾掉 ${parsed.dropped} 行雜訊` : ''}
       </p>
-      <button
-        type="button"
-        className="btn btn--primary"
-        disabled={!parsed.rows.length}
-        onClick={() => onDone({ rows: parsed.rows.map(({ name, qty, price }) => ({ name, qty, price })), total: parsed.total, date: parsed.date, source: 'text' })}
-      >
-        下一步
-      </button>
+      <div className="row gap">
+        {ai && (
+          <button type="button" className="btn btn--mint grow" disabled={!text.trim() || busy} onClick={runAi}>
+            {busy ? 'AI 整理中…' : '✨ 用 AI 整理'}
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn--primary grow"
+          disabled={!parsed.rows.length || busy}
+          onClick={() => onDone({ rows: parsed.rows.map(({ name, qty, price }) => ({ name, qty, price })), total: parsed.total, date: parsed.date, source: 'text', dropped: parsed.dropped })}
+        >
+          下一步
+        </button>
+      </div>
+      {ai && <p className="muted small">格式很亂、抓錯很多時，用 AI 整理會準很多（每天有次數上限）。</p>}
     </div>
   )
 }
@@ -319,8 +412,9 @@ function ReviewRows({ result, onBack, onConfirm }: { result: ImportResult; onBac
   return (
     <div className="stack">
       <div className="muted small">
-        {result.source === 'qr' ? '從電子發票讀到' : result.source === 'ocr' ? '辨識結果，請順手檢查一下' : '解析結果'}
+        {result.source === 'qr' ? '從電子發票讀到' : result.source === 'ocr' ? '辨識結果，請順手檢查一下' : result.source === 'ai' ? '✨ AI 整理的結果，請順手檢查' : result.source === 'pdf' ? '從 PDF 讀到' : '解析結果'}
         {result.date ? ` · ${result.date}` : ''}
+        {result.dropped ? ` · 過濾了 ${result.dropped} 行雜訊` : ''}
       </div>
       <div className="stack-s">
         {rows.map((r, i) => (
@@ -337,6 +431,11 @@ function ReviewRows({ result, onBack, onConfirm }: { result: ImportResult; onBac
       <button type="button" className="btn btn--ghost" onClick={() => setRows((rs) => [...rs, { name: '', qty: 1, price: 0, raw: '' }])}>
         ＋ 加一項
       </button>
+      {result.extras && result.extras.length > 0 && (
+        <div className="muted small">
+          會一起加到「額外費用」：{result.extras.map((e) => `${e.name} ${e.amount > 0 ? '+' : ''}${e.amount}`).join('、')}
+        </div>
+      )}
       <div className={`review-total ${mismatch ? 'is-warn' : ''}`}>
         <span>品項合計 {sum.toLocaleString()}</span>
         {result.total != null && <span>{mismatch ? `⚠️ 明細總計是 ${result.total.toLocaleString()}` : '✓ 跟總計一致'}</span>}

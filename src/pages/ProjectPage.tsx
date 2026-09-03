@@ -63,8 +63,16 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
 
   const onImport = (r: ImportResult) => {
     set((pp) => {
+      const fresh = !pp.items.some((it) => it.price > 0)
+      if (fresh && r.currency && r.currency !== pp.currency && CURRENCIES.some((c) => c.code === r.currency)) {
+        pp.currency = r.currency
+        pp.rate = r.currency === base ? null : pp.rate
+      }
       for (const row of r.rows) {
         pp.items.push(newItem({ name: row.name, qty: row.qty, price: row.price, sharedBy: 'all', kind: 'shared' }))
+      }
+      for (const e of r.extras ?? []) {
+        pp.extras.push({ id: uid(), name: e.name, emoji: e.amount < 0 ? '🏷️' : /外送|運費|delivery/i.test(e.name) ? '🛵' : '🧂', type: 'fixed', value: e.amount, split: 'proportional' })
       }
       if (r.date && !pp.items.length) pp.date = r.date
       if (pp.mode === 'equal' && pp.items.length > r.rows.length) {

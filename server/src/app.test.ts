@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp } from './app.ts'
+import { normalise } from './ai.ts'
 
 const T0 = 1_700_000_000_000
 function setup(t0 = T0) {
@@ -20,13 +21,16 @@ function setup(t0 = T0) {
   }
   const shareHtml = join(tmpdir(), `banban-share-${process.pid}.html`)
   writeFileSync(shareHtml, '<!doctype html><html><head><meta charset="utf-8"><title>x</title></head><body><div id="root"></div></body></html>')
+  const aiCalls: unknown[] = []
   const { app, purgeExpired, purgeInactive } = createApp({
     db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30, push, publicOrigin: 'https://example.test', shareHtml,
     renderOgImage: async (i) => Buffer.from('PNG:' + i.title),
+    ai: { enabled: true, parse: async (input) => { aiCalls.push(input); return { items: [{ name: '牛肉麵', qty: 1, price: 180 }], extras: [], total: 180, date: null, currency: 'TWD', merchant: null } } },
+    aiDailyQuota: 2,
   })
   const call = (path: string, init: RequestInit = {}, token?: string, ip = '1.2.3.4') =>
     app.request(path, { ...init, headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
-  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead }
+  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead, aiCalls }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function body(r: Response | Promise<Response>): Promise<any> {
@@ -197,5 +201,33 @@ describe('open graph', () => {
     tick(3 * 86_400_000)
     expect(await (await call(`/s/${id}`)).text()).toContain('分帳連結過期了')
     expect(await (await call(`/api/share/${id}/og.png`)).text()).toBe('PNG:這個分帳連結過期了')
+  })
+})
+
+describe('ai parse', () => {
+  it('requires auth, enforces the daily quota, validates images', async () => {
+    const { call, tick, aiCalls } = setup()
+    expect((await call('/api/parse', post({ text: 'x' }))).status).toBe(401)
+    expect((await call('/api/parse', post({}), A)).status).toBe(400)
+    expect((await call('/api/parse', post({ image: { mediaType: 'text/html', base64: 'x' } }), A)).status).toBe(400)
+    let r = await body(call('/api/parse', post({ text: '牛肉麵 180' }), A))
+    expect(r.items[0].name).toBe('牛肉麵')
+    expect(r.remaining).toBe(1)
+    await call('/api/parse', post({ image: { mediaType: 'image/jpeg', base64: 'AAAA' } }), A)
+    expect(aiCalls).toHaveLength(2)
+    expect((await call('/api/parse', post({ text: 'x' }), A)).status).toBe(429)
+    tick(86_400_000)
+    expect((await call('/api/parse', post({ text: 'x' }), A)).status).toBe(200)
+    expect((await body(call('/api/health'))).ai).toBe(true)
+  })
+  it('normalises sloppy model output', () => {
+    const out = normalise('好的，這是結果：{"items":[{"name":"1. 珍奶","qty":"2","price":"65"},{"name":"","price":10},{"name":"x","price":0}],"extras":[{"name":"折扣","amount":-20}],"total":"150","date":"2026/09/03","currency":"twd"}')
+    expect(out.items).toEqual([{ name: '1. 珍奶', qty: 2, price: 65 }])
+    expect(out.extras).toEqual([{ name: '折扣', amount: -20 }])
+    expect(out.total).toBe(150)
+    expect(out.date).toBeNull()
+    expect(out.currency).toBeNull()
+    expect(() => normalise('nothing')).toThrow()
+    expect(normalise('<think>想一下</think>```json\n{"items":[{"name":"a","qty":1,"price":5}]}\n```').items).toHaveLength(1)
   })
 })

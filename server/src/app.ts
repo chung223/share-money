@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { Db } from './db.ts'
 import { readFileSync, statSync } from 'node:fs'
 import { renderOg } from './og.ts'
+import type { AiParser } from './ai.ts'
 
 export interface AppOptions {
   db: Db
@@ -19,6 +20,10 @@ export interface AppOptions {
   publicOrigin?: string
   /** Path to the built share page (dist/s/index.html); OG tags get injected into it for /s/:id. */
   shareHtml?: string
+  /** Receipt parser backed by an LLM; `enabled: false` = endpoint reports unavailable. */
+  ai?: AiParser
+  /** Per-account daily quota for /api/parse. */
+  aiDailyQuota?: number
   /** Test hook: replace the PNG renderer. */
   renderOgImage?: (i: { title: string; subtitle: string; mood?: 'happy' | 'wow' | 'sleepy' }) => Promise<Buffer>
 }
@@ -79,7 +84,7 @@ function makeLimiter(limit: number, windowMs: number, now: () => number) {
 
 type Vars = { accountId: string }
 
-export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg }: AppOptions) {
+export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40 }: AppOptions) {
   const app = new Hono<{ Variables: Vars }>()
   const q = {
     accountByHash: db.raw.prepare('SELECT id FROM accounts WHERE token_hash = ?'),
@@ -134,7 +139,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
   const clientIp = (h: Headers) => h.get('cf-connecting-ip') || h.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local'
 
   app.use('/api/*', cors({ origin: corsOrigin ?? '*', allowHeaders: ['Authorization', 'Content-Type'], allowMethods: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS'] }))
-  app.get('/api/health', (c) => c.json({ ok: true, time: now() }))
+  app.get('/api/health', (c) => c.json({ ok: true, time: now(), ai: !!ai?.enabled, push: !!push }))
 
   // --- auth: bearer token -> account (auto-created on first use) ---
   /** Returns the account id, null when the token is missing/malformed, RATE_LIMITED when a new account may not be created now. */
@@ -328,6 +333,33 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     q.insertEvent.run(id, body.personId, kind, now(), note, label)
     if (kind === 'paid' && push) notifyOwner(row.account_id, `${label ?? '有人'} 說已經轉帳了 💸`)
     return c.json({ ok: true })
+  })
+
+  // --- AI receipt parsing (needs an account for the quota; content is never stored) ---
+  const aiUsage = new Map<string, { day: string; n: number }>()
+  app.post('/api/parse', async (c) => {
+    if (!ai?.enabled) return c.json({ error: 'ai_disabled' }, 404)
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const day = new Date(now()).toISOString().slice(0, 10)
+    const u = aiUsage.get(accountId)
+    const n = u && u.day === day ? u.n : 0
+    if (n >= aiDailyQuota) return c.json({ error: 'quota', quota: aiDailyQuota }, 429)
+    const body = await c.req.json().catch(() => null)
+    const text = typeof body?.text === 'string' ? body.text.slice(0, 8000) : undefined
+    const img = body?.image
+    const image =
+      img && typeof img.base64 === 'string' && img.base64.length < 6_000_000 && /^image\/(jpeg|png|webp|gif)$/.test(img.mediaType ?? '') ? { mediaType: img.mediaType as string, base64: img.base64 as string } : undefined
+    if (!text && !image) return c.json({ error: 'bad_request' }, 400)
+    aiUsage.set(accountId, { day, n: n + 1 })
+    if (aiUsage.size > 5000) aiUsage.clear()
+    try {
+      const out = await ai.parse({ text, image })
+      return c.json({ ...out, remaining: aiDailyQuota - n - 1 })
+    } catch (e) {
+      console.error('ai parse failed', (e as Error).message)
+      return c.json({ error: 'ai_failed' }, 502)
+    }
   })
 
   // --- web push ---

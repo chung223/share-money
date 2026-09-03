@@ -11,6 +11,7 @@
 - 機密在 `/www/banban-data/.env`（`ADMIN_TOKEN`），ecosystem 讀進環境變數。統計：`curl -H "Authorization: Bearer $ADMIN_TOKEN" https://spilt.chung.men/api/admin/stats`。
 - 多用戶：任何人開同步就自動建帳號（每 IP 每小時最多 10 個新帳號），180 天沒同步的帳號連資料一起刪（`INACTIVE_DAYS`）。
 - 分享頁 `/s/<id>` 由 nginx 反代到 Node（`app.get('/s/:id')` 讀 `dist/s/index.html` 注入 OG）；預覽圖 `server/src/og.ts`（sharp + SVG），中文字型 `/www/banban-data/fonts/NotoSansTC-Bold.otf`，ecosystem 設 `FONTCONFIG_FILE`。
+- AI 辨識：`MINIMAX_*` 在 `/www/banban-data/.env`（與 thin/tarot 同一把），`server/src/ai.ts`；沒 key 時 `/api/health` 的 `ai:false`，前端就不顯示 AI 選項。
 - 推播：VAPID 金鑰也在 `/www/banban-data/.env`；SW 是 `src/sw.ts`（injectManifest，被 tsconfig exclude，靠 vite build 編譯）。
 - 更新：`deploy/update.sh`。備份：`deploy/backup-db.sh`（cron 04:15，`/www/my_www_backup/banban/`）。
 - 寶塔會把 immutable 的 `.user.ini` 丟進 `dist/`，Vite 清 dist 會失敗；update.sh 已處理。

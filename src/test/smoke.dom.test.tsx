@@ -21,6 +21,7 @@ import { useStore, newProject } from '../store'
 
 beforeEach(async () => {
   localStorage.clear()
+  await new Promise((r) => setTimeout(r, 200)) // let the previous test's debounced persist() land before wiping
   await useStore.getState().wipe() // fake-indexeddb persists across tests in a file
   location.hash = ''
   vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
@@ -33,10 +34,12 @@ afterEach(() => {
 })
 
 async function boot(onboarded = true) {
-  useStore.setState({ prefs: { ...useStore.getState().prefs, onboarded }, tutorialOpen: false })
+  // init() re-reads IndexedDB on mount and would overwrite anything we add before it resolves,
+  // so reset `ready` and wait for it instead of sleeping a fixed time.
+  useStore.setState({ ready: false, prefs: { ...useStore.getState().prefs, onboarded }, tutorialOpen: false })
   render(<App />)
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 50))
+    for (let i = 0; i < 100 && !useStore.getState().ready; i++) await new Promise((r) => setTimeout(r, 10))
   })
 }
 
