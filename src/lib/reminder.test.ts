@@ -28,6 +28,6 @@ describe('reminder', () => {
   it('shows base currency for foreign projects', () => {
     const jp = { ...p, currency: 'JPY', rate: 0.21 }
     const r = computeSplit(jp).people.find((x) => x.person.id === 'm')!
-    expect(reminderText({ project: jp, person: r, baseCurrency: 'TWD', tone: 'normal' })).toMatch(/¥250（約 NT$5[23]）/)
+    expect(reminderText({ project: jp, person: r, baseCurrency: 'TWD', tone: 'normal' })).toMatch(/¥250（約 NT\$5[23]）/)
   })
 })
