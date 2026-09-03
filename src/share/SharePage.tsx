@@ -4,6 +4,8 @@ import { decryptSnapshot, encryptNote, parseShareLocation, type ShareSnapshot } 
 import { categoryOf } from '../lib/category'
 import type { Project } from '../lib/types'
 import { Avatar, Confetti, Mascot } from '../components/ui'
+import QrCode from '../components/QrCode'
+import { QUICK_PAY, twqrTransfer } from '../lib/twqr'
 
 type Status = { kind: 'loading' } | { kind: 'error'; title: string; hint: string; mood: 'sad' | 'sleepy' } | { kind: 'ok'; snap: ShareSnapshot; paid: string[] }
 
@@ -242,6 +244,18 @@ export default function SharePage() {
                         <>
                           {canPay ? (
                             <div className="stack-s">
+                              {pay!.showTwqr !== false && pay!.bankCode && pay!.account && t.dueCurrency === 'TWD' && (() => {
+                                const code = twqrTransfer({ bankCode: pay!.bankCode!, account: pay!.account!, amount: t.remaining, name: snap.ownerName })
+                                return code ? (
+                                  <div className="twqr">
+                                    <QrCode text={code} size={168} />
+                                    <div className="small">
+                                      <div className="strong">🏦 銀行 App 掃這個</div>
+                                      <div className="muted">台灣 Pay 或任一家銀行 App 的「掃碼轉帳」，帳號和 {fmtMoney(t.remaining, 'TWD')} 會自動帶入。</div>
+                                    </div>
+                                  </div>
+                                ) : null
+                              })()}
                               {pay!.account && (
                                 <button type="button" className="pay-box__row" onClick={() => copy(`${pay!.bankCode ? pay!.bankCode + ' ' : ''}${pay!.account}`, '帳號')}>
                                   <span>
@@ -256,6 +270,24 @@ export default function SharePage() {
                                 <a className="btn btn--mint" href={pay!.linePay} target="_blank" rel="noreferrer">
                                   💚 用 LINE Pay / 街口 轉帳
                                 </a>
+                              )}
+                              {(pay!.quickPay ?? ['linepay', 'jkopay']).length > 0 && (
+                                <div className="quickpay">
+                                  {QUICK_PAY.filter((q) => (pay!.quickPay ?? ['linepay', 'jkopay']).includes(q.id)).map((q) => (
+                                    <button
+                                      key={q.id}
+                                      type="button"
+                                      className="btn btn--ghost btn--sm"
+                                      onClick={() => {
+                                        navigator.clipboard?.writeText(String(t.remaining)).catch(() => {})
+                                        flash(`已複製 ${fmtMoney(t.remaining, t.dueCurrency)}，${q.hint}`)
+                                        setTimeout(() => (location.href = q.scheme), 400)
+                                      }}
+                                    >
+                                      {q.emoji} 開 {q.label}
+                                    </button>
+                                  ))}
+                                </div>
                               )}
                               {pay!.note && <div className="muted small">{pay!.note}</div>}
                             </div>

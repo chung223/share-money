@@ -1818,3 +1818,22 @@ button.hero-stat {
   cursor: pointer;
   text-align: left;
 }
+.twqr {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px dashed var(--line);
+}
+.twqr .qr {
+  padding: 4px;
+  box-shadow: none;
+  flex: none;
+}
+.quickpay {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
