@@ -12,12 +12,18 @@ export const QUICK_PAY: { id: QuickPayApp; label: string; emoji: string; scheme:
   { id: 'twpay', label: '台灣 Pay', emoji: '🏦', scheme: 'twmp://', hint: '打開台灣 Pay 後掃上面的 QR，帳號金額自動帶入' },
 ]
 
+/**
+ * 依國泰 CUBE 收款碼實測樣本對齊（2026-09-03 解碼）：
+ *   TWQRP://個人轉帳/158/02/V1?D5=013&D6=0000699500327859
+ * 整串再 encodeURIComponent 一次、帳號補零到 16 位、單位名稱固定「個人轉帳」。
+ * 我們多帶 D1（金額，新台幣整數元）與 D10=901（幣別 TWD），讓掃描端把金額也帶入。
+ */
 export function twqrTransfer(o: { bankCode: string; account: string; amount: number; name?: string }): string | null {
   const bank = o.bankCode.replace(/\D/g, '')
-  const acct = o.account.replace(/[^\d]/g, '')
+  const acct = o.account.replace(/\D/g, '')
   if (!/^\d{3}$/.test(bank) || acct.length < 6 || acct.length > 16) return null
   if (!(o.amount > 0) || o.amount > 99_999_999) return null
-  const cents = Math.round(o.amount * 100)
-  const name = encodeURIComponent((o.name || '轉帳').slice(0, 20))
-  return `TWQRP://${name}/158/02/V1?D1=${cents}&D5=${bank}&D6=${acct}&D10=901`
+  const dollars = Math.round(o.amount)
+  const plain = `TWQRP://個人轉帳/158/02/V1?D1=${dollars}&D5=${bank}&D6=${acct.padStart(16, '0')}&D10=901`
+  return encodeURIComponent(plain)
 }
