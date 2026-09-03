@@ -56,7 +56,7 @@ export default function SyncSection() {
       <div className="section-title">☁️ 多裝置同步</div>
       {!cfg ? (
         <>
-          <p className="muted small">手機記、電腦看。資料先用你這台的金鑰加密才上傳，伺服器只看得到亂碼。分享連結給朋友也需要開這個。</p>
+          <p className="muted small">手機記、電腦看。資料先用你這台的金鑰加密才上傳，伺服器只看得到亂碼。分享連結給朋友也需要開這個。金鑰就是你的身分：沒有帳號密碼、也沒有「忘記密碼」，請把 QR 或那串文字存好。180 天沒同步的雲端資料會被清掉。</p>
           <div className="row gap wrap">
             <button type="button" className="btn btn--primary" disabled={busy} onClick={() => run(() => enableSync(), '同步開好了，去另一台裝置掃 QR 就能連', '☁️')}>
               建立同步金鑰
@@ -95,7 +95,7 @@ export default function SyncSection() {
             <p className="muted small center-text">在另一台裝置打開 반반 → 設定 → 多裝置同步 → 「我有另一台的金鑰」掃這個。</p>
             <QrCode text={cfg.secret} />
             <code className="code-box">{cfg.secret}</code>
-            <p className="small danger-text center-text">拿到這串的人就能解開你的所有帳本，別貼到群組裡。</p>
+            <p className="small danger-text center-text">拿到這串的人就能解開你的所有帳本，別貼到群組裡。反過來說，所有裝置都不見又沒存這串，雲端的資料就拿不回來了。</p>
             <button
               type="button"
               className="btn btn--ghost"

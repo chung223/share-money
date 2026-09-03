@@ -8,6 +8,8 @@
 - 後端：PM2 `banban`（`deploy/ecosystem.config.cjs`，Node 24 於 `~/.local/node24`），`127.0.0.1:3456`，`DATA_DIR=/www/banban-data`。
 - nginx：寶塔反代 `/api/` → 3456（`vhost/nginx/proxy/spilt.chung.men/`）；自訂設定在 `vhost/nginx/extension/spilt.chung.men/`：HTTPS 轉址（配合 Cloudflare Flexible）、PWA MIME、`/s/` try_files。
 - 憑證：寶塔 Let's Encrypt，自動續。Cloudflare 橘雲，zone 是 Flexible SSL（CF 走 80 連原站），所以**不要**開寶塔的「強制 HTTPS」。
+- 機密在 `/www/banban-data/.env`（`ADMIN_TOKEN`），ecosystem 讀進環境變數。統計：`curl -H "Authorization: Bearer $ADMIN_TOKEN" https://spilt.chung.men/api/admin/stats`。
+- 多用戶：任何人開同步就自動建帳號（每 IP 每小時最多 10 個新帳號），180 天沒同步的帳號連資料一起刪（`INACTIVE_DAYS`）。
 - 更新：`deploy/update.sh`。備份：`deploy/backup-db.sh`（cron 04:15，`/www/my_www_backup/banban/`）。
 - 寶塔會把 immutable 的 `.user.ini` 丟進 `dist/`，Vite 清 dist 會失敗；update.sh 已處理。
 

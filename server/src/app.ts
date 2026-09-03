@@ -7,6 +7,10 @@ export interface AppOptions {
   db: Db
   corsOrigin?: string
   now?: () => number
+  /** Bearer token for GET /api/admin/stats. Unset = endpoint disabled. */
+  adminToken?: string
+  /** Accounts not seen for this many days are deleted (with their blob and shares). */
+  inactiveDays?: number
 }
 
 const SYNC_MAX_BYTES = 2 * 1024 * 1024
@@ -14,6 +18,7 @@ const SHARE_MAX_BYTES = 256 * 1024
 const SHARE_MAX_DAYS = 180
 const TOKEN_RE = /^[A-Za-z0-9_-]{32,128}$/
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+const RATE_LIMITED = Symbol('rate_limited')
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
@@ -40,7 +45,7 @@ function makeLimiter(limit: number, windowMs: number, now: () => number) {
 
 type Vars = { accountId: string }
 
-export function createApp({ db, corsOrigin, now = () => Date.now() }: AppOptions) {
+export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180 }: AppOptions) {
   const app = new Hono<{ Variables: Vars }>()
   const q = {
     accountByHash: db.raw.prepare('SELECT id FROM accounts WHERE token_hash = ?'),
@@ -66,8 +71,23 @@ export function createApp({ db, corsOrigin, now = () => Date.now() }: AppOptions
     ),
     ackEvent: db.raw.prepare('UPDATE share_events SET acked = 1 WHERE id = ? AND share_id IN (SELECT id FROM shares WHERE account_id = ?)'),
     purgeExpired: db.raw.prepare('DELETE FROM shares WHERE expires_at < ?'),
+    purgeInactive: db.raw.prepare('DELETE FROM accounts WHERE last_seen_at < ?'),
+    stats: db.raw.prepare(
+      `SELECT
+        (SELECT COUNT(*) FROM accounts) AS accounts,
+        (SELECT COUNT(*) FROM accounts WHERE last_seen_at > ?) AS active_7d,
+        (SELECT COUNT(*) FROM accounts WHERE last_seen_at > ?) AS active_30d,
+        (SELECT COUNT(*) FROM blobs) AS blobs,
+        (SELECT COALESCE(SUM(LENGTH(cipher)), 0) FROM blobs) AS blob_bytes,
+        (SELECT COUNT(*) FROM shares) AS shares,
+        (SELECT COUNT(*) FROM shares WHERE expires_at > ?) AS shares_live,
+        (SELECT COUNT(*) FROM share_events) AS events,
+        (SELECT COUNT(*) FROM share_events WHERE acked = 0) AS events_pending`,
+    ),
   }
   const publicLimiter = makeLimiter(60, 60_000, now)
+  // Anyone can mint an account by showing up with a new token; keep one IP from minting thousands.
+  const signupLimiter = makeLimiter(10, 3_600_000, now)
 
   const clientIp = (h: Headers) => h.get('cf-connecting-ip') || h.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local'
 
@@ -75,24 +95,38 @@ export function createApp({ db, corsOrigin, now = () => Date.now() }: AppOptions
   app.get('/api/health', (c) => c.json({ ok: true, time: now() }))
 
   // --- auth: bearer token -> account (auto-created on first use) ---
-  const requireAuth = (c: import('hono').Context<{ Variables: Vars }>): string | null => {
+  /** Returns the account id, null when the token is missing/malformed, RATE_LIMITED when a new account may not be created now. */
+  const requireAuth = (c: import('hono').Context<{ Variables: Vars }>): string | null | typeof RATE_LIMITED => {
     const m = /^Bearer\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')
     if (!m || !TOKEN_RE.test(m[1])) return null
     const h = hashToken(m[1])
     const t = now()
     let row = q.accountByHash.get(h) as { id: string } | undefined
     if (!row) {
+      if (!signupLimiter(clientIp(c.req.raw.headers))) return RATE_LIMITED
       const id = newId(12)
       q.insertAccount.run(id, h, t, t)
       row = { id }
     } else q.touchAccount.run(t, row.id)
     return row.id
   }
+  const authFail = (c: import('hono').Context<{ Variables: Vars }>, r: null | typeof RATE_LIMITED) =>
+    r === RATE_LIMITED ? c.json({ error: 'rate_limited', reason: 'too many new accounts from this address' }, 429) : c.json({ error: 'unauthorized' }, 401)
+
   app.use('/api/sync', async (c, next) => {
     const accountId = requireAuth(c)
-    if (!accountId) return c.json({ error: 'unauthorized' }, 401)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
     c.set('accountId', accountId)
     await next()
+  })
+
+  app.get('/api/admin/stats', (c) => {
+    if (!adminToken) return c.json({ error: 'not_found' }, 404)
+    const m = /^Bearer\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')
+    if (!m || m[1] !== adminToken) return c.json({ error: 'unauthorized' }, 401)
+    const t = now()
+    const row = q.stats.get(t - 7 * 86_400_000, t - 30 * 86_400_000, t) as Record<string, number>
+    return c.json({ ...row, inactive_days: inactiveDays, time: t })
   })
 
   // --- sync ---
@@ -133,7 +167,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now() }: AppOptions
   // --- shares (owner) ---
   app.post('/api/share', async (c) => {
     const accountId = requireAuth(c)
-    if (!accountId) return c.json({ error: 'unauthorized' }, 401)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
     const body = await c.req.json().catch(() => null)
     if (!body || typeof body.projectId !== 'string' || !ID_RE.test(body.projectId) || typeof body.cipher !== 'string' || !Number.isInteger(body.expiresAt))
       return c.json({ error: 'bad_request' }, 400)
@@ -153,7 +187,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now() }: AppOptions
 
   app.post('/api/share/ack', async (c) => {
     const accountId = requireAuth(c)
-    if (!accountId) return c.json({ error: 'unauthorized' }, 401)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
     const body = await c.req.json().catch(() => null)
     if (!body || !Array.isArray(body.ids)) return c.json({ error: 'bad_request' }, 400)
     for (const id of body.ids) if (Number.isInteger(id)) q.ackEvent.run(id, accountId)
@@ -162,7 +196,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now() }: AppOptions
 
   app.delete('/api/share/:id', async (c) => {
     const accountId = requireAuth(c)
-    if (!accountId) return c.json({ error: 'unauthorized' }, 401)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
     q.deleteShare.run(c.req.param('id'), accountId)
     return c.json({ ok: true })
   })
@@ -198,5 +232,10 @@ export function createApp({ db, corsOrigin, now = () => Date.now() }: AppOptions
     return c.json({ error: 'server_error' }, 500)
   })
 
-  return { app, purgeExpired: () => q.purgeExpired.run(now() - 7 * 86_400_000) }
+  const purgeExpired = () => q.purgeExpired.run(now() - 7 * 86_400_000)
+  const purgeInactive = () => {
+    const r = q.purgeInactive.run(now() - inactiveDays * 86_400_000)
+    return Number(r.changes)
+  }
+  return { app, purgeExpired, purgeInactive }
 }

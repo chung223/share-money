@@ -6,10 +6,10 @@ const T0 = 1_700_000_000_000
 function setup(t0 = T0) {
   let t = t0
   const db = openDb(':memory:')
-  const { app, purgeExpired } = createApp({ db, now: () => t })
-  const call = (path: string, init: RequestInit = {}, token?: string) =>
-    app.request(path, { ...init, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
-  return { call, tick: (ms: number) => (t += ms), purgeExpired }
+  const { app, purgeExpired, purgeInactive } = createApp({ db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30 })
+  const call = (path: string, init: RequestInit = {}, token?: string, ip = '1.2.3.4') =>
+    app.request(path, { ...init, headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
+  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function body(r: Response | Promise<Response>): Promise<any> {
@@ -96,5 +96,35 @@ describe('share', () => {
     expect((await call('/api/share/nope')).status).toBe(404)
     expect((await call('/api/share/nope/paid', post({ personId: 'x' }))).status).toBe(404)
     expect((await call('/api/share', post({}))).status).toBe(401)
+  })
+})
+
+describe('multi-user hardening', () => {
+  it('limits new accounts per IP but not returning ones', async () => {
+    const { call } = setup()
+    for (let i = 0; i < 10; i++) expect((await call('/api/sync', {}, String(i).repeat(43))).status).toBe(200)
+    expect((await call('/api/sync', {}, 'z'.repeat(43))).status).toBe(429)
+    expect((await call('/api/sync', {}, '0'.repeat(43))).status).toBe(200) // existing account still fine
+    expect((await call('/api/sync', {}, 'z'.repeat(43), '9.9.9.9')).status).toBe(200) // other IP
+  })
+  it('purges inactive accounts with their blobs and shares', async () => {
+    const { call, tick, purgeInactive } = setup()
+    await call('/api/sync', json({ baseVersion: 0, cipher: 'c' }), A)
+    const { id } = await body(call('/api/share', post({ projectId: 'p', cipher: 'x', expiresAt: T0 + 100 * 86_400_000 }), A))
+    tick(10 * 86_400_000)
+    await call('/api/sync', {}, B) // B stays fresh
+    tick(25 * 86_400_000)
+    expect(purgeInactive()).toBe(1)
+    expect((await call(`/api/share/${id}`)).status).toBe(404)
+    expect((await body(call('/api/sync', {}, A))).version).toBe(0) // recreated empty
+    expect((await body(call('/api/sync', {}, B))).version).toBe(0)
+  })
+  it('admin stats need the admin token', async () => {
+    const { call } = setup()
+    await call('/api/sync', json({ baseVersion: 0, cipher: 'abc' }), A)
+    expect((await call('/api/admin/stats')).status).toBe(401)
+    expect((await call('/api/admin/stats', {}, 'nope')).status).toBe(401)
+    const s = await body(call('/api/admin/stats', {}, 'admin-secret'))
+    expect(s).toMatchObject({ accounts: 1, active_7d: 1, blobs: 1, blob_bytes: 3, shares: 0 })
   })
 })
