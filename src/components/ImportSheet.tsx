@@ -16,6 +16,8 @@ export interface ImportResult {
   extras?: { name: string; amount: number }[]
   currency?: string | null
   dropped?: number
+  /** 合併了幾個檔案 */
+  files?: number
 }
 
 function useAi() {
@@ -145,8 +147,10 @@ function QrScanner({ onDone }: { onDone: (r: ImportResult) => void }) {
     }
   }, [active, handleText])
 
-  const onFile = async (f: File | undefined) => {
-    if (!f) return
+  const onFile = async (list: FileList | null) => {
+    for (const f of list ? [...list] : []) await onOneFile(f)
+  }
+  const onOneFile = async (f: File) => {
     const bmp = await createImageBitmap(f)
     const canvas = document.createElement('canvas')
     const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height))
@@ -202,7 +206,7 @@ function QrScanner({ onDone }: { onDone: (r: ImportResult) => void }) {
         <button type="button" className="btn btn--ghost grow" onClick={() => fileRef.current?.click()}>
           🖼 從相簿選照片
         </button>
-        <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+        <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { onFile(e.target.files); e.target.value = '' }} />
         {left && !complete && (
           <button type="button" className="btn btn--primary grow" onClick={finish}>
             先用左邊的 {left.items.length} 項
@@ -214,6 +218,18 @@ function QrScanner({ onDone }: { onDone: (r: ImportResult) => void }) {
 }
 
 /* ---------------- Photo OCR ---------------- */
+
+/** 多張收據合併成一份：品項串起來、總計全部有才相加、額外費用串起來、日期取第一個 */
+export function mergeResults(list: ImportResult[]): ImportResult {
+  if (list.length === 1) return list[0]
+  const rows = list.flatMap((r) => r.rows)
+  const totals = list.map((r) => r.total)
+  const total = totals.every((t): t is number => t != null) ? Math.round(totals.reduce((a, b) => a + b, 0) * 100) / 100 : null
+  const extras = list.flatMap((r) => r.extras ?? [])
+  const dropped = list.reduce((a, r) => a + (r.dropped ?? 0), 0)
+  const sources = new Set(list.map((r) => r.source))
+  return { rows, total, date: list.find((r) => r.date)?.date ?? null, source: sources.size === 1 ? list[0].source : 'ocr', extras: extras.length ? extras : undefined, currency: list.find((r) => r.currency)?.currency ?? null, dropped, files: list.length }
+}
 
 function PhotoOcr({ onDone }: { onDone: (r: ImportResult) => void }) {
   const camRef = useRef<HTMLInputElement>(null)
@@ -241,52 +257,64 @@ function PhotoOcr({ onDone }: { onDone: (r: ImportResult) => void }) {
     return data.text
   }
 
-  const finishText = (text: string, source: ImportResult['source']) => {
-    const parsed = parseReceiptText(text)
-    if (!parsed.rows.length) {
-      setErr('沒抓到任何品項。光線好一點、拍正一點會更準；或改用「貼上文字」。' + (ai && !useAiMode ? ' 也可以打開 AI 辨識試試。' : ''))
-      return
+  /** 一個檔案 → 一份結果（不呼叫 onDone），多檔時再合併 */
+  const parseOne = async (f: File, aiMode: boolean): Promise<ImportResult | null> => {
+    const asText = (text: string, source: ImportResult['source']): ImportResult | null => {
+      const parsed = parseReceiptText(text)
+      if (!parsed.rows.length) return null
+      return { rows: parsed.rows.map(({ name, qty, price }) => ({ name, qty, price })), total: parsed.total, date: parsed.date, source, dropped: parsed.dropped }
     }
-    onDone({ rows: parsed.rows.map(({ name, qty, price }) => ({ name, qty, price })), total: parsed.total, date: parsed.date, source, dropped: parsed.dropped })
-  }
-  const finishAi = async (input: { text?: string; image?: { mediaType: string; base64: string } }) => {
-    setStatus('AI 整理中…')
-    setProgress(60)
-    const r = await aiParse(input)
-    if (!r.items.length) {
-      setErr('AI 沒看出品項，換張清楚一點的圖或改用貼上文字。')
-      return
+    const asAi = async (input: { text?: string; image?: { mediaType: string; base64: string } }): Promise<ImportResult | null> => {
+      setStatus('AI 整理中…')
+      setProgress(60)
+      const r = await aiParse(input)
+      if (r.remaining <= 5) showToast(`今天 AI 額度剩 ${r.remaining} 次`, '✨')
+      if (!r.items.length) return null
+      return { rows: r.items, total: r.total, date: r.date, source: 'ai', extras: r.extras, currency: r.currency }
     }
-    onDone({ rows: r.items, total: r.total, date: r.date, source: 'ai', extras: r.extras, currency: r.currency })
-    if (r.remaining <= 5) showToast(`今天 AI 額度剩 ${r.remaining} 次`, '✨')
+    if (isPdf(f)) {
+      setStatus('讀取 PDF…')
+      const text = await pdfToText(f)
+      if (text.replace(/\s/g, '').length > 30) return aiMode ? asAi({ text }) : asText(text, 'pdf')
+      const canvas = await pdfFirstPageToCanvas(f)
+      setPreview(canvas.toDataURL('image/jpeg', 0.7))
+      return aiMode ? asAi({ image: { mediaType: 'image/jpeg', base64: canvasToJpegBase64(canvas) } }) : asText(await ocrCanvas(canvas), 'ocr')
+    }
+    const canvas = await downscale(f, aiMode ? 1600 : 1800)
+    return aiMode ? asAi({ image: { mediaType: 'image/jpeg', base64: canvasToJpegBase64(canvas) } }) : asText(await ocrCanvas(canvas), 'ocr')
   }
 
-  const run = async (f: File | undefined) => {
-    if (!f) return
+  const run = async (list: FileList | null) => {
+    const files = list ? [...list] : []
+    if (!files.length) return
     setErr(null)
     setBusy(true)
     setProgress(0)
     setStatus('準備中…')
-    setPreview(isPdf(f) ? null : URL.createObjectURL(f))
+    const first = files[0]
+    setPreview(isPdf(first) ? null : URL.createObjectURL(first))
+    const aiMode = ai && useAiMode
+    const results: ImportResult[] = []
+    const failed: string[] = []
     try {
-      if (isPdf(f)) {
-        setStatus('讀取 PDF…')
-        const text = await pdfToText(f)
-        if (text.replace(/\s/g, '').length > 30) {
-          if (ai && useAiMode) await finishAi({ text })
-          else finishText(text, 'pdf')
-          return
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]
+        if (files.length > 1) setStatus(`第 ${i + 1} / ${files.length} 個：${f.name}`)
+        if (!isPdf(f)) setPreview(URL.createObjectURL(f))
+        try {
+          const r = await parseOne(f, aiMode)
+          if (r) results.push(r)
+          else failed.push(f.name)
+        } catch (e) {
+          failed.push(`${f.name}（${e instanceof Error ? e.message : '失敗'}）`)
         }
-        // scanned PDF: rasterise page 1
-        const canvas = await pdfFirstPageToCanvas(f)
-        setPreview(canvas.toDataURL('image/jpeg', 0.7))
-        if (ai && useAiMode) await finishAi({ image: { mediaType: 'image/jpeg', base64: canvasToJpegBase64(canvas) } })
-        else finishText(await ocrCanvas(canvas), 'ocr')
+      }
+      if (!results.length) {
+        setErr('沒抓到任何品項。光線好一點、拍正一點會更準；或改用「貼上文字」。' + (ai && !useAiMode ? ' 也可以打開 AI 辨識試試。' : ''))
         return
       }
-      const canvas = await downscale(f, ai && useAiMode ? 1600 : 1800)
-      if (ai && useAiMode) await finishAi({ image: { mediaType: 'image/jpeg', base64: canvasToJpegBase64(canvas) } })
-      else finishText(await ocrCanvas(canvas), 'ocr')
+      if (failed.length) showToast(`${failed.length} 個檔案沒抓到：${failed.join('、')}`, '🤔')
+      onDone(mergeResults(results))
     } catch (e) {
       setErr('辨識失敗：' + (e instanceof Error ? e.message : '未知錯誤'))
     } finally {
@@ -297,7 +325,7 @@ function PhotoOcr({ onDone }: { onDone: (r: ImportResult) => void }) {
   return (
     <div className="stack">
       <div className="ocr-box">
-        {preview ? <img src={preview} alt="" className="ocr-box__img" /> : <div className="ocr-box__hint">📷 拍收據、電子明細截圖，或從相簿 / 檔案選（支援 PDF）</div>}
+        {preview ? <img src={preview} alt="" className="ocr-box__img" /> : <div className="ocr-box__hint">📷 拍收據、電子明細截圖，或從相簿 / 檔案選（可多選、支援 PDF）</div>}
         {busy && (
           <div className="ocr-box__overlay">
             <div className="spinner" />
@@ -330,8 +358,8 @@ function PhotoOcr({ onDone }: { onDone: (r: ImportResult) => void }) {
         <button type="button" className="btn btn--mint grow" disabled={busy} onClick={() => fileRef.current?.click()}>
           🖼 相簿 / 檔案
         </button>
-        <input ref={camRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { run(e.target.files?.[0]); e.target.value = '' }} />
-        <input ref={fileRef} type="file" accept="image/*,application/pdf,.pdf" hidden onChange={(e) => { run(e.target.files?.[0]); e.target.value = '' }} />
+        <input ref={camRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { run(e.target.files); e.target.value = '' }} />
+        <input ref={fileRef} type="file" accept="image/*,application/pdf,.pdf" multiple hidden onChange={(e) => { run(e.target.files); e.target.value = '' }} />
       </div>
     </div>
   )
@@ -415,6 +443,7 @@ function ReviewRows({ result, onBack, onConfirm }: { result: ImportResult; onBac
         {result.source === 'qr' ? '從電子發票讀到' : result.source === 'ocr' ? '辨識結果，請順手檢查一下' : result.source === 'ai' ? '✨ AI 整理的結果，請順手檢查' : result.source === 'pdf' ? '從 PDF 讀到' : '解析結果'}
         {result.date ? ` · ${result.date}` : ''}
         {result.dropped ? ` · 過濾了 ${result.dropped} 行雜訊` : ''}
+        {result.files && result.files > 1 ? ` · 合併了 ${result.files} 個檔案` : ''}
       </div>
       <div className="stack-s">
         {rows.map((r, i) => (
