@@ -100,6 +100,11 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 - 一句話開帳本（含語音）、AI 寫催款訊息、AI 幫我分品項。提示詞與正規化在 `src/lib/aiAssist.ts`，呼叫走 `aiChat`（自己的金鑰優先，否則站方 `/api/ai/chat`）。
 - 使用者可自帶 OpenAI 相容／Anthropic 金鑰（`AppData.aiProvider`），站方 AI 需邀請碼與每日額度。
 
+## 旅程與共編（2026-09-04 ✅）
+
+- `Trip` 容器：一趟旅程裝多本各自分類的帳（`Project.tripId`）；旅程頁跨本抵銷結算（`tripSettlement`）、AI 總結；墓碑 `trip:<id>`。
+- 共編：`src/lib/tripSync.ts`，一趟一把 `bt1.` 金鑰（連結 `#/join/<id>/<secret>`），HKDF 派生 token（伺服器 `trips` 表只存 hash、密文、版本）。成員以 `share.myPersonId` 對應旅程內的人。推：改動 2.5 秒後；拉：開旅程頁、回前景、帳號同步後。衝突用 `mergeBundle`（沿用 mergeData）。內容與伺服器相同就不推（`bundleHash`）。
+
 ## 第三階段：智慧匯入
 
 - ✅ 2026-09-03 伺服器端 AI 收據辨識 `POST /api/parse`（`server/src/ai.ts`，MiniMax OpenAI 相容 API：文字 M2.5、圖片 M3；每帳號每日 `AI_DAILY_QUOTA` 次）。前端圖片／PDF／貼上文字都可切 AI；`src/lib/pdf.ts` 用 pdfjs 抽文字層或轉圖。

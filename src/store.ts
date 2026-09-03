@@ -401,6 +401,7 @@ export const useStore = create<State>((set, get) => ({
         if (get().locked) return
         let data = get().data
         let changed = false
+        let remoteHash: string | null = null
         if (remote.cipher && remote.version !== share.version) {
           let bundle: TripBundle
           try {
@@ -408,6 +409,7 @@ export const useStore = create<State>((set, get) => ({
           } catch {
             throw new Error('旅程金鑰對不上')
           }
+          remoteHash = bundleHash(bundle)
           data = mergeBundle(data, id, bundle)
           changed = true
         }
@@ -419,7 +421,8 @@ export const useStore = create<State>((set, get) => ({
           set({ data })
           scheduleSave(get)
         }
-        const needPush = !remote.cipher || hash !== (cur.share?.pushedHash ?? '')
+        // 內容跟伺服器一樣就不推（例如剛加入、或別台已推過同樣內容），避免版本號互推
+        const needPush = !remote.cipher || (remoteHash != null ? hash !== remoteHash : hash !== (cur.share?.pushedHash ?? ''))
         if (needPush) {
           const r = await tripApi.put('', keys.token, share.id, remote.version, await encryptBundle(keys.key, mine))
           if (!r.ok) {

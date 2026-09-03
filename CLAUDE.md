@@ -25,4 +25,5 @@
 - 資料改動一律走 `useStore.update / updateProject`（會 bump `updatedAt`、標 dirty、2.5 秒後自動同步）。只改 metadata 不想動 `updatedAt` 時用 `updateProject(id, fn, false)`。
 - 同步與分享的所有加密都在前端（`src/lib/sync.ts`、`src/lib/share.ts`），後端只碰密文。改 API 記得同步更新 `server/src/app.test.ts`。
 - `npm test` 會一起跑後端測試；`npm run build` 前跑 `tsc --noEmit`，後端另有 `cd server && npm run typecheck`。
+- 旅程共編：`src/lib/tripSync.ts` + store 的 shareTrip/joinTrip/syncTrip；伺服器 `/api/trip*` 不綁帳號，token 由旅程金鑰派生。測試 `src/test/tripShare.dom.test.tsx` 用假伺服器模擬兩台裝置，改共編邏輯一定要跑。
 - 分享頁是獨立入口 `s/index.html` → `src/share/`，不要 import zustand store。OG 標題（`share.ogTitle`）是分享唯一的明文，絕不放金額。
