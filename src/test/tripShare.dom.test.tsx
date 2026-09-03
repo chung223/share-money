@@ -4,7 +4,7 @@ import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('virtual:pwa-register', () => ({ registerSW: () => () => Promise.resolve() }))
 ;(globalThis as { __APP_VERSION__?: string }).__APP_VERSION__ = 'test'
-import { useStore, newProject } from '../store'
+import { useStore } from '../store'
 import { parseTripSecret } from '../lib/tripSync'
 
 // in-memory /api/trip server
