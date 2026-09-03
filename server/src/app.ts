@@ -110,7 +110,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     } else q.touchAccount.run(t, row.id)
     return row.id
   }
-  const authFail = (c: import('hono').Context<{ Variables: Vars }>, r: null | typeof RATE_LIMITED) =>
+  const authFail = (c: import('hono').Context<{ Variables: Vars }>, r: string | null | typeof RATE_LIMITED) =>
     r === RATE_LIMITED ? c.json({ error: 'rate_limited', reason: 'too many new accounts from this address' }, 429) : c.json({ error: 'unauthorized' }, 401)
 
   app.use('/api/sync', async (c, next) => {
