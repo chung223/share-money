@@ -8,6 +8,7 @@ import type { LockDelay } from '../lib/storage'
 import SyncSection from '../components/SyncSection'
 import PayInfoSection from '../components/PayInfoSection'
 import GroupsSection from '../components/GroupsSection'
+import UpdateSection from '../components/UpdateSection'
 
 export function PersonEditor({ person, onChange, onDelete, title }: { person: Person; onChange: (p: Person) => void; onDelete?: () => void; title: string }) {
   return (
@@ -216,6 +217,8 @@ export default function SettingsPage() {
             <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => onImportFile(e.target.files?.[0])} />
           </div>
         </section>
+
+        <UpdateSection />
 
         <section className="card stack">
           <div className="section-title">🧹 清除</div>

@@ -2,6 +2,28 @@ import { defineConfig, type Plugin } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import { resolve } from 'node:path'
+import { execSync } from 'node:child_process'
+
+function gitHash() {
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+  } catch {
+    return 'dev'
+  }
+}
+const d = new Date()
+const pad = (n: number) => String(n).padStart(2, '0')
+const APP_VERSION = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())} ${gitHash()}`
+
+// dist/version.json：設定頁「檢查更新」用來比對的版本號
+function versionFile(): Plugin {
+  return {
+    name: 'banban-version-file',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ version: APP_VERSION }) })
+    },
+  }
+}
 
 // Dev-only: /s/<id> -> s/index.html (production nginx does the same with try_files), /api -> local server.
 function sharePages(): Plugin {
@@ -21,6 +43,7 @@ const base = process.env.BASE_PATH ?? '/'
 
 export default defineConfig({
   base,
+  define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
   build: {
     rollupOptions: {
       input: { main: resolve(import.meta.dirname, 'index.html'), share: resolve(import.meta.dirname, 's/index.html') },
@@ -32,8 +55,9 @@ export default defineConfig({
   plugins: [
     react(),
     sharePages(),
+    versionFile(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       includeAssets: ['icon.svg', 'apple-touch-icon.png', 'mascot.svg'],
       manifest: {
         name: '반반 BanBan 半半分帳',
@@ -53,6 +77,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        globIgnores: ['**/version.json'],
         // Share pages and the API are never the app shell.
         navigateFallbackDenylist: [/^\/s\//, /^\/api\//],
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,

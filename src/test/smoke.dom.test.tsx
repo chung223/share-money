@@ -4,6 +4,9 @@
  * Not a visual test; it exists so a broken selector never ships a blank page again.
  */
 import 'fake-indexeddb/auto'
+import { vi as vitest } from 'vitest'
+vitest.mock('virtual:pwa-register', () => ({ registerSW: () => () => Promise.resolve() }))
+;(globalThis as { __APP_VERSION__?: string }).__APP_VERSION__ = 'test'
 import { act, render, screen, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // jsdom gaps

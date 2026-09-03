@@ -6,6 +6,7 @@ import Home from './pages/Home'
 import ProjectPage from './pages/ProjectPage'
 import SettingsPage from './pages/SettingsPage'
 import { Mascot } from './components/ui'
+import UpdateBanner from './components/UpdateBanner'
 
 function useTheme() {
   const theme = useStore((s) => s.prefs.theme)
@@ -80,6 +81,7 @@ export default function App() {
   return (
     <div className="app">
       {page}
+      <UpdateBanner />
       {toast && (
         <div className="toast" key={toast.id}>
           {toast.emoji && <span className="toast__emoji">{toast.emoji}</span>}

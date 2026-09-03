@@ -1600,3 +1600,20 @@ button.avatar:active {
   color: var(--c-pink-ink);
   font-weight: 900;
 }
+.update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + var(--sab));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  border: 2px solid var(--c-pink);
+  font-weight: 800;
+  z-index: 40;
+}
