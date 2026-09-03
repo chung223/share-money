@@ -109,7 +109,7 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 3. ~~部分還款（記錄已還金額而非只有是 / 否）。~~ ✅ 2026-09-03（`partial`）
 4. ~~台幣結果取整到 5 或 10 元。~~ ✅ 2026-09-03（`rounding`，外幣帳本取整台幣金額）
 5. ~~常用組合範本（固定群組一鍵帶入）。~~ ✅ 2026-09-03（`groups`）
-6. 分類與月報表（可愛圖表）。
+6. 分類與月報表（可愛圖表）。— 分類 ✅ 2026-09-03（`Project.category`，六類，文案／圖示／分法名稱跟著分類，首頁可篩選）；月報表 ⏳
 7. 收據照片附加（注意加密後的儲存空間）。
 8. CSV / Excel 匯出、Splitwise 匯入。
 9. 旅遊模式：多帳本合併結算。

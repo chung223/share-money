@@ -45,7 +45,7 @@ export function reminderText({ project: p, person: r, amount, baseAmount, amount
   const a = amount ?? r.totalRounded
   const b = amount === undefined ? r.baseTotal : (baseAmount ?? null)
   const amt = amountText ?? fmtMoney(a, p.currency) + (foreign && b != null ? `（約 ${fmtMoney(b, baseCurrency)}）` : '')
-  const what = `${fmtDateShort(p.date)} ${p.emoji}${p.name || '那餐'}`
+  const what = `${fmtDateShort(p.date)} ${p.emoji}${p.name || '那次'}`
   const pay = payLines(payInfo)
   const lines: string[] = []
   if (tone === 'cute') {

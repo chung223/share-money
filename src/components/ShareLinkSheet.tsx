@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import { SHARE_DURATIONS, shareUrl } from '../lib/share'
 import type { Project } from '../lib/types'
 import { Sheet } from './ui'
+import { categoryOf } from '../lib/category'
 
 export default function ShareLinkSheet({ p, open, onClose }: { p: Project; open: boolean; onClose: () => void }) {
   const createShare = useStore((s) => s.createShare)
@@ -30,7 +31,7 @@ export default function ShareLinkSheet({ p, open, onClose }: { p: Project; open:
   }
   const copy = async () => {
     if (!url) return
-    const text = `${p.emoji} ${p.name || '這餐'} 的分帳：${url}\n點進去看自己的份，轉完按「我轉了」就好～`
+    const text = `${p.emoji} ${p.name || categoryOf(p).thisOne} 的分帳：${url}\n點進去看自己的份，轉完按「我轉了」就好～`
     try {
       if (navigator.share) await navigator.share({ text })
       else {

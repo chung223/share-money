@@ -18,7 +18,7 @@ export default function PaymentsSheet({ open, onClose, p, result, set }: { open:
   return (
     <Sheet open={open} onClose={onClose} title="💸 誰付了錢">
       <div className="stack">
-        <p className="muted small">例如你付餐、朋友付計程車。填實際付的金額，結果頁會算出最少轉幾次就能結清。</p>
+        <p className="muted small">例如你付餐、朋友付計程車；或你刷卡買單、朋友付現一部分。填實際付的金額，結果頁會算出最少轉幾次就能結清。</p>
         <div className="stack-s">
           {p.people.map((person) => (
             <div key={person.id} className="row gap center">

@@ -3,6 +3,7 @@ import { computeSplit, fmtMoney } from '../lib/split'
 import { decryptSnapshot, encryptNote, parseShareLocation, type ShareSnapshot } from '../lib/share'
 import type { Project } from '../lib/types'
 import { Avatar, Confetti, Mascot } from '../components/ui'
+import { categoryOf } from '../lib/category'
 
 type Status = { kind: 'loading' } | { kind: 'error'; title: string; hint: string; mood: 'sad' | 'sleepy' } | { kind: 'ok'; snap: ShareSnapshot; paid: string[] }
 
@@ -147,7 +148,7 @@ export default function SharePage() {
         <div className="card card--pink total-card">
           <div>
             <div className="total-card__label">
-              {p.emoji} {p.name || '這一餐'} · {p.date}
+              {p.emoji} {p.name || categoryOf(p).unnamed} · {p.date}
             </div>
             <div className="total-card__value">{fmtMoney(r.grandTotalRounded, p.currency)}</div>
             {foreign && r.baseGrandTotal != null && <div className="total-card__base">≈ {fmtMoney(r.baseGrandTotal, base)}</div>}

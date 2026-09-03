@@ -3,21 +3,24 @@ import { newItem, newPerson, uid, useStore } from '../store'
 import { navigate } from '../router'
 import { computeSplit, fmtMoney, itemTotal, resolveSharers, summaryText } from '../lib/split'
 import { fetchRate } from '../lib/rates'
-import { CURRENCIES, PROJECT_EMOJIS, currencyMeta, type Extra, type Group, type Item, type Person, type Project, type SplitMode } from '../lib/types'
+import { CURRENCIES, currencyMeta, type Extra, type Group, type Item, type Person, type Project, type SplitMode } from '../lib/types'
 import { Avatar, Confetti, EmojiPicker, Empty, MoneyInput, Segmented, Sheet } from '../components/ui'
 import ShareLinkSheet from '../components/ShareLinkSheet'
 import ReminderSheet from '../components/ReminderSheet'
 import PaymentsSheet from '../components/PaymentsSheet'
 import SettleSheet from '../components/SettleSheet'
 import { hasMultiPayer, transferKey, type PersonResult, type Transfer } from '../lib/split'
+import { CATEGORIES, categoryOf, emojiOptions, type CategoryMeta } from '../lib/category'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
 import { PersonEditor } from './SettingsPage'
 
-const MODES: { value: SplitMode; label: string; emoji: string; desc: string }[] = [
-  { value: 'equal', label: '均攤', emoji: '🍕', desc: '總額除以人數，最無腦' },
-  { value: 'items', label: '各點各的', emoji: '🍱', desc: '每個品項點誰吃，多人就均分' },
-  { value: 'mains', label: '主餐+共享', emoji: '🍲', desc: '主餐各付各的，小菜大家分' },
-]
+function modesFor(cat: CategoryMeta): { value: SplitMode; label: string; emoji: string; desc: string }[] {
+  return [
+    { value: 'equal', label: '均攤', emoji: '➗', desc: '總額除以人數，最無腦' },
+    { value: 'items', label: '各點各的', emoji: '🧾', desc: cat.itemsDesc },
+    { value: 'mains', label: cat.mainsMode, emoji: '🧩', desc: cat.mainsDesc },
+  ]
+}
 
 export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'result' }) {
   const project = useStore((s) => s.data.projects.find((p) => p.id === id))
@@ -54,6 +57,8 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   const base = data.baseCurrency
   const foreign = p.currency !== base
   const multi = hasMultiPayer(p)
+  const cat = categoryOf(p)
+  const MODES = modesFor(cat)
   const isPayerOf = (id: string) => (multi ? (p.payments ?? []).some((x) => x.personId === id && x.amount > 0) : id === p.payerId)
 
   const onImport = (r: ImportResult) => {
@@ -90,9 +95,27 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
           {p.emoji}
         </button>
         <div className="grow stack-xs">
-          <input className="input input--title" placeholder="這餐叫什麼？" value={p.name} onChange={(e) => set((pp) => (pp.name = e.target.value))} />
+          <input className="input input--title" placeholder={cat.namePlaceholder} value={p.name} onChange={(e) => set((pp) => (pp.name = e.target.value))} />
           <input className="input input--date" type="date" value={p.date} onChange={(e) => set((pp) => (pp.date = e.target.value))} />
         </div>
+      </div>
+      <div className="chip-row cat-row">
+        {CATEGORIES.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`chip chip--xs ${cat.id === c.id ? 'is-on' : ''}`}
+            onClick={() =>
+              set((pp) => {
+                const prev = categoryOf(pp)
+                pp.category = c.id
+                if (prev.emojis.includes(pp.emoji)) pp.emoji = c.emojis[0] // still on the old default set -> swap icon too
+              })
+            }
+          >
+            {c.emoji} {c.label}
+          </button>
+        ))}
       </div>
 
       <Segmented<'items' | 'result'>
@@ -188,7 +211,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
             </div>
             {p.items.length === 0 && (
               <p className="muted small">
-                {p.mode === 'equal' ? '輸入這餐的總金額就好。' : '一項一項加，或用右上角掃發票。'}
+                {p.mode === 'equal' ? cat.equalHint : '一項一項加，或用右上角掃發票。'}
               </p>
             )}
             <div className="stack-s">
@@ -260,7 +283,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
       <Sheet open={emojiOpen} onClose={() => setEmojiOpen(false)} title="換個圖示">
         <EmojiPicker
           value={p.emoji}
-          options={PROJECT_EMOJIS}
+          options={emojiOptions(cat)}
           onChange={(e) => {
             set((pp) => (pp.emoji = e))
             setEmojiOpen(false)
@@ -303,7 +326,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
                     setEditPerson(null)
                   }}
                 >
-                  移出這餐
+                  移出{cat.thisOne}
                 </button>
               )}
             </div>
@@ -330,7 +353,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
       <ImportSheet open={importOpen} onClose={() => setImportOpen(false)} onImport={onImport} />
       <PaymentsSheet open={paymentsOpen} onClose={() => setPaymentsOpen(false)} p={p} result={result} set={set} />
 
-      <Sheet open={menuOpen} onClose={() => { setMenuOpen(false); setConfirmDelete(false) }} title={p.name || '未命名聚餐'}>
+      <Sheet open={menuOpen} onClose={() => { setMenuOpen(false); setConfirmDelete(false) }} title={p.name || cat.unnamed}>
         <div className="stack">
           <button
             type="button"
@@ -509,7 +532,7 @@ function ItemRow({ item, p, set }: { item: Item; p: Project; set: (fn: (p: Proje
                 })
               }
             >
-              {item.kind === 'main' ? '🍛 主餐' : '🥗 共享'}
+              {item.kind === 'main' ? categoryOf(p).mainLabel : categoryOf(p).sharedLabel}
             </button>
           )}
           <div className="who-chips">
@@ -714,7 +737,7 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
       <Confetti on={confetti} />
       <div className={`card card--${allSettled ? 'mint' : 'pink'} total-card`}>
         <div>
-          <div className="total-card__label">{allSettled ? '全部收齊了！' : '這餐總共'}</div>
+          <div className="total-card__label">{allSettled ? '全部收齊了！' : `${categoryOf(p).thisOne}總共`}</div>
           <div className="total-card__value">{fmtMoney(result.grandTotalRounded, p.currency)}</div>
           {foreign && result.baseGrandTotal != null && <div className="total-card__base">≈ {fmtMoney(result.baseGrandTotal, base)}</div>}
           {foreign && result.baseGrandTotal == null && <div className="total-card__base">還沒有匯率，回明細設定一下</div>}

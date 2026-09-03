@@ -1669,3 +1669,31 @@ button.avatar:active {
   font-size: 28px;
   line-height: 1;
 }
+.cat-row {
+  margin-top: -6px;
+}
+.cat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.cat-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 6px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.cat-btn:active {
+  transform: scale(0.96);
+}
+.cat-btn__emoji {
+  font-size: 28px;
+  line-height: 1;
+}

@@ -8,7 +8,7 @@ import { Avatar, EmojiPicker, Segmented, Sheet } from './ui'
 const MODES: { value: SplitMode; label: string }[] = [
   { value: 'equal', label: '均攤' },
   { value: 'items', label: '各點各的' },
-  { value: 'mains', label: '主餐+共享' },
+  { value: 'mains', label: '個人+共享' },
 ]
 
 export function GroupEditor({ group, onChange }: { group: Group; onChange: (g: Group) => void }) {

@@ -41,6 +41,8 @@ export interface Project {
   id: Id
   name: string
   emoji: string
+  /** 吃飯 / 交通 / 購物 / 旅遊 / 娛樂 / 其他；缺省時由 emoji 推測（見 lib/category.ts）。 */
+  category?: 'food' | 'transport' | 'shopping' | 'travel' | 'fun' | 'other'
   date: string // YYYY-MM-DD
   createdAt: number
   updatedAt: number

@@ -4,6 +4,7 @@ import { PALETTE, PERSON_EMOJIS } from './lib/types'
 import { api, apiBase, applyShareEvents, canon, decryptWithKey, deriveSyncKeys, encryptWithKey, forUpload, generateSecret, mergeData, parseSecret, SyncError, type SyncKeys } from './lib/sync'
 import { buildSnapshot, decryptNote, encryptSnapshot, generateShareKey } from './lib/share'
 import { clearSyncMeta, loadSyncMeta, saveSyncMeta } from './lib/syncMeta'
+import { categoryOf } from './lib/category'
 import {
   createPinSession,
   loadPlain,
@@ -95,7 +96,7 @@ interface State {
   setPrefs: (p: Partial<LocalPrefs>) => void
   update: (fn: (d: AppData) => void) => void
   updateProject: (id: string, fn: (p: Project) => void, touch?: boolean) => void
-  addProject: (groupId?: string) => Project
+  addProject: (groupId?: string, category?: Project['category']) => Project
   deleteProject: (id: string) => void
   duplicateProject: (id: string) => Project | null
   importData: (data: AppData) => void
@@ -248,16 +249,20 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
-  addProject: (groupId) => {
+  addProject: (groupId, category) => {
     const { data } = get()
     const p = newProject(data.me, data.baseCurrency)
+    if (category) {
+      p.category = category
+      p.emoji = categoryOf({ emoji: '', category }).emojis[0]
+    }
     const g = groupId ? data.groups?.find((x) => x.id === groupId) : undefined
     if (g) {
       const pool = [data.me, ...data.friends]
       p.people = g.personIds.map((id) => pool.find((x) => x.id === id)).filter((x): x is Person => !!x)
       if (!p.people.some((x) => x.id === data.me.id)) p.people.unshift(data.me)
       p.mode = g.mode
-      p.emoji = g.emoji
+      if (!category) p.emoji = g.emoji
       if (g.mode !== 'equal') p.items = []
     }
     get().update((d) => d.projects.unshift(p))

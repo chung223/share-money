@@ -5,14 +5,15 @@ import { computeSplit, fmtMoney } from '../lib/split'
 import { Empty, Mascot, Sheet } from '../components/ui'
 import type { Project } from '../lib/types'
 import type { Group } from '../lib/types'
+import { CATEGORIES, categoryOf, modeLabel, type Category } from '../lib/category'
 
 // zustand selectors must return a stable reference, or React re-renders forever
 const NO_GROUPS: Group[] = []
 
-const MODE_LABEL: Record<Project['mode'], string> = { equal: '均攤', items: '各點各的', mains: '主餐+共享' }
 
 function ProjectCard({ p, base }: { p: Project; base: string }) {
   const r = useMemo(() => computeSplit(p, base), [p, base])
+  const cat = categoryOf(p)
   const others = r.transfers
   const settledCount = others.filter((x) => x.settled).length
   const allSettled = others.length > 0 && settledCount === others.length
@@ -21,11 +22,13 @@ function ProjectCard({ p, base }: { p: Project; base: string }) {
     <button type="button" className={`card project-card ${allSettled ? 'is-done' : ''}`} onClick={() => navigate(`/p/${p.id}`)}>
       <div className="project-card__emoji">{p.emoji}</div>
       <div className="project-card__body">
-        <div className="project-card__name">{p.name || '未命名聚餐'}</div>
+        <div className="project-card__name">{p.name || cat.unnamed}</div>
         <div className="project-card__meta">
           <span>{p.date}</span>
           <span className="dot">·</span>
-          <span>{MODE_LABEL[p.mode]}</span>
+          <span>{cat.label}</span>
+          <span className="dot">·</span>
+          <span>{modeLabel(p.mode, cat)}</span>
           <span className="dot">·</span>
           <span>{p.people.length} 人</span>
         </div>
@@ -74,12 +77,15 @@ export default function Home() {
 
   const groups = useStore((s) => s.data.groups ?? NO_GROUPS)
   const [pick, setPick] = useState(false)
-  const create = (groupId?: string) => {
+  const [filter, setFilter] = useState<Category | 'all'>('all')
+  const create = (groupId?: string, category?: Category) => {
     setPick(false)
-    const p = addProject(groupId)
+    const p = addProject(groupId, category)
     navigate(`/p/${p.id}`)
   }
-  const onCreate = () => (groups.length ? setPick(true) : create())
+  const onCreate = () => setPick(true)
+  const usedCats = useMemo(() => new Set(projects.map((p) => categoryOf(p).id)), [projects])
+  const shown = filter === 'all' ? projects : projects.filter((p) => categoryOf(p).id === filter)
 
   return (
     <div className="page">
@@ -115,13 +121,29 @@ export default function Home() {
 
       <main className="stack">
         {projects.length === 0 ? (
-          <Empty title="還沒有帳本呢" hint="聚餐、外送、計程車，每一餐都是一個小專案。">
+          <Empty title="還沒有帳本呢" hint="聚餐、計程車、團購、旅行，每次代墊都是一個小帳本。">
             <button type="button" className="btn btn--primary btn--lg" onClick={onCreate}>
               ＋ 開一個新帳本
             </button>
           </Empty>
         ) : (
-          projects.map((p) => <ProjectCard key={p.id} p={p} base={base} />)
+          <>
+            {usedCats.size > 1 && (
+              <div className="chip-row">
+                <button type="button" className={`chip chip--xs ${filter === 'all' ? 'is-on' : ''}`} onClick={() => setFilter('all')}>
+                  全部
+                </button>
+                {CATEGORIES.filter((c) => usedCats.has(c.id)).map((c) => (
+                  <button key={c.id} type="button" className={`chip chip--xs ${filter === c.id ? 'is-on' : ''}`} onClick={() => setFilter(c.id)}>
+                    {c.emoji} {c.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {shown.map((p) => (
+              <ProjectCard key={p.id} p={p} base={base} />
+            ))}
+          </>
         )}
       </main>
 
@@ -132,19 +154,32 @@ export default function Home() {
       )}
 
       <Sheet open={pick} onClose={() => setPick(false)} title="開新帳本">
-        <div className="stack-s">
-          {groups.map((g) => (
-            <button key={g.id} type="button" className="btn btn--ghost row gap center" onClick={() => create(g.id)}>
-              <span style={{ fontSize: 22 }}>{g.emoji}</span>
-              <span className="grow left">
-                {g.name}
-                <span className="muted small"> · {g.personIds.length} 人</span>
-              </span>
-            </button>
-          ))}
-          <button type="button" className="btn btn--primary" onClick={() => create()}>
-            📝 空白帳本
-          </button>
+        <div className="stack">
+          <div className="label">這次是什麼？</div>
+          <div className="cat-grid">
+            {CATEGORIES.map((c) => (
+              <button key={c.id} type="button" className="cat-btn" onClick={() => create(undefined, c.id)}>
+                <span className="cat-btn__emoji">{c.emoji}</span>
+                {c.label}
+              </button>
+            ))}
+          </div>
+          {groups.length > 0 && (
+            <>
+              <div className="label">或用常用組合</div>
+              <div className="stack-s">
+                {groups.map((g) => (
+                  <button key={g.id} type="button" className="btn btn--ghost row gap center" onClick={() => create(g.id)}>
+                    <span style={{ fontSize: 22 }}>{g.emoji}</span>
+                    <span className="grow left">
+                      {g.name}
+                      <span className="muted small"> · {g.personIds.length} 人</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </Sheet>
     </div>
