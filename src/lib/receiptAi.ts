@@ -53,9 +53,19 @@ function trimBase(u: string) {
   return u.trim().replace(/\/+$/, '')
 }
 
-/** 組出 fetch 的 URL / headers / body。抽出來方便測試，也讓瀏覽器與伺服器用同一份。 */
-export function buildRequest(cfg: AiProviderConfig, input: ParseInput, opts: { browser?: boolean } = {}): { url: string; init: RequestInit } {
-  const userText = input.text ? `收據內容：\n${input.text}` : '請解析這張收據。'
+export interface ChatInput {
+  system: string
+  user: string
+  image?: { mediaType: string; base64: string }
+  maxTokens?: number
+  temperature?: number
+}
+
+/** 組出 fetch 的 URL / headers / body（任意 system/user）。抽出來方便測試，也讓瀏覽器與伺服器用同一份。 */
+export function buildChatRequest(cfg: AiProviderConfig, input: ChatInput, opts: { browser?: boolean } = {}): { url: string; init: RequestInit } {
+  const userText = input.user
+  const maxTokens = input.maxTokens ?? 2000
+  const temperature = input.temperature ?? 0.1
   if (cfg.format === 'anthropic') {
     const content: unknown[] = []
     if (input.image) content.push({ type: 'image', source: { type: 'base64', media_type: input.image.mediaType, data: input.image.base64 } })
@@ -64,7 +74,7 @@ export function buildRequest(cfg: AiProviderConfig, input: ParseInput, opts: { b
     if (opts.browser) headers['anthropic-dangerous-direct-browser-access'] = 'true'
     return {
       url: `${trimBase(cfg.baseUrl) || 'https://api.anthropic.com/v1'}/messages`,
-      init: { method: 'POST', headers, body: JSON.stringify({ model: cfg.model, max_tokens: 2000, system: RECEIPT_SYSTEM, messages: [{ role: 'user', content }] }) },
+      init: { method: 'POST', headers, body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, temperature, system: input.system, messages: [{ role: 'user', content }] }) },
     }
   }
   const content: unknown[] = []
@@ -75,8 +85,35 @@ export function buildRequest(cfg: AiProviderConfig, input: ParseInput, opts: { b
     init: {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({ model: cfg.model, messages: [{ role: 'system', content: RECEIPT_SYSTEM }, { role: 'user', content }], temperature: 0.1, max_tokens: 2000 }),
+      body: JSON.stringify({ model: cfg.model, messages: [{ role: 'system', content: input.system }, { role: 'user', content }], temperature, max_tokens: maxTokens }),
     },
+  }
+}
+
+/** 收據解析專用的請求。 */
+export function buildRequest(cfg: AiProviderConfig, input: ParseInput, opts: { browser?: boolean } = {}) {
+  return buildChatRequest(cfg, { system: RECEIPT_SYSTEM, user: input.text ? `收據內容：\n${input.text}` : '請解析這張收據。', image: input.image }, opts)
+}
+
+/** 任意對話：回傳模型文字（已去掉 <think>）。 */
+export async function callChat(cfg: AiProviderConfig, input: ChatInput, opts: { browser?: boolean; fetchFn?: typeof fetch; timeoutMs?: number } = {}): Promise<string> {
+  const fetchFn = opts.fetchFn ?? fetch
+  const { url, init } = buildChatRequest(cfg, input, opts)
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 60_000)
+  try {
+    const r = await fetchFn(url, { ...init, signal: ctl.signal })
+    const bodyText = await r.text()
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${bodyText.slice(0, 200)}`)
+    let j: unknown
+    try {
+      j = JSON.parse(bodyText)
+    } catch {
+      throw new Error('回應不是 JSON：' + bodyText.slice(0, 120))
+    }
+    return extractText(cfg.format, j).replace(/<think>[\s\S]*?<\/think>/g, '').trim()
+  } finally {
+    clearTimeout(timer)
   }
 }
 

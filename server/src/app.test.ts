@@ -26,7 +26,7 @@ function setup(t0 = T0) {
   const { app, purgeExpired, purgeInactive } = createApp({
     db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30, push, publicOrigin: 'https://example.test', shareHtml,
     renderOgImage: async (i) => Buffer.from('PNG:' + i.title),
-    ai: { enabled: true, parse: async (input) => { aiCalls.push(input); return { items: [{ name: '牛肉麵', qty: 1, price: 180 }], extras: [], total: 180, date: null, currency: 'TWD', merchant: null } } },
+    ai: { enabled: true, parse: async (input) => { aiCalls.push(input); return { items: [{ name: '牛肉麵', qty: 1, price: 180 }], extras: [], total: 180, date: null, currency: 'TWD', merchant: null } }, chat: async (input) => { aiCalls.push(input); return 'echo:' + input.user } },
     aiDailyQuota: 2,
     aiGlobalDaily: 3,
     aiInviteCode: 'friends-only',
@@ -272,5 +272,20 @@ describe('byok proxy', () => {
     // anthropic format goes to /messages with x-api-key
     await call('/api/parse/byok', post({ provider: { ...provider, format: 'anthropic', baseUrl: 'https://api.anthropic.com/v1' }, text: 'x' }), A)
     expect(byokCalls[1]).toEqual({ url: 'https://api.anthropic.com/v1/messages', auth: 'sk-user' })
+  })
+})
+
+describe('ai chat', () => {
+  it('site chat is gated and counts against the quota; byok chat proxies', async () => {
+    const { call, byokCalls } = setup()
+    expect((await call('/api/ai/chat', post({ system: 's', user: 'u' }), A)).status).toBe(403)
+    await call('/api/ai/redeem', post({ code: 'friends-only' }), A)
+    expect((await call('/api/ai/chat', post({ system: 's' }), A)).status).toBe(400)
+    const r = await body(call('/api/ai/chat', post({ system: 's', user: 'hi' }), A))
+    expect(r).toMatchObject({ text: 'echo:hi', remaining: 1 })
+    const provider = { format: 'openai', baseUrl: 'https://api.example.com/v1', model: 'm', apiKey: 'sk-user' }
+    const b = await body(call('/api/ai/byok', post({ provider, system: 's', user: 'u' }), A))
+    expect(typeof b.text).toBe('string')
+    expect(byokCalls.at(-1)?.url).toBe('https://api.example.com/v1/chat/completions')
   })
 })

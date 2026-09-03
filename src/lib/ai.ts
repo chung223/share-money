@@ -1,7 +1,7 @@
 /** AI 收據辨識（伺服器代呼叫 MiniMax）。需要開同步（用帳號算額度），且帳號要有權限（邀請碼或管理者開通）。 */
 import { useStore } from '../store'
 import { api, apiBase, deriveSyncKeys, SyncError } from './sync'
-import { callProvider, type AiProviderConfig, type ParseInput, type ParseOutput } from './receiptAi'
+import { callChat, callProvider, type AiProviderConfig, type ChatInput, type ParseInput, type ParseOutput } from './receiptAi'
 
 export interface AiParsed {
   items: { name: string; qty: number; price: number }[]
@@ -116,4 +116,35 @@ export async function aiParse(input: { text?: string; image?: { mediaType: strin
 /** canvas → JPEG base64（不含 data: 前綴），給 AI 用 */
 export function canvasToJpegBase64(c: HTMLCanvasElement, quality = 0.85) {
   return c.toDataURL('image/jpeg', quality).split(',')[1]
+}
+
+/** 一般對話（一句話開帳本、催款、分配品項…）：自己的金鑰優先（瀏覽器直連→代轉），否則站方 AI。回傳模型文字。 */
+export async function aiChat(input: ChatInput): Promise<string> {
+  const own = ownProvider()
+  if (own) {
+    try {
+      return await callChat(own, input, { browser: true })
+    } catch (e) {
+      if (!(e instanceof TypeError)) throw e
+    }
+    const s = useStore.getState()
+    if (!s.data.sync) await s.enableSync()
+    const a = (await authed())!
+    const r = await api.raw(a.base, '/api/ai/byok', { method: 'POST', token: a.token, json: { provider: own, ...input } })
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}))
+      throw new Error(j.message || j.reason || `代轉失敗（HTTP ${r.status}）`)
+    }
+    return (await r.json()).text as string
+  }
+  const s = useStore.getState()
+  if (!s.data.sync) await s.enableSync()
+  const a = (await authed())!
+  const r = await api.raw(a.base, '/api/ai/chat', { method: 'POST', token: a.token, json: input })
+  if (r.status === 403) throw new Error('這個帳號還沒開通 AI，到設定頁輸入邀請碼')
+  if (r.status === 429) throw new Error('今天的 AI 額度用完了')
+  if (r.status === 404) throw new Error('伺服器沒開 AI')
+  if (!r.ok) throw new SyncError('server', `AI 失敗（HTTP ${r.status}）`)
+  invalidateAiStatus()
+  return (await r.json()).text as string
 }

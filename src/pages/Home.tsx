@@ -7,6 +7,8 @@ import type { Project } from '../lib/types'
 import type { Group } from '../lib/types'
 import { CATEGORIES, categoryOf, modeLabel, type Category } from '../lib/category'
 import BalancesSheet from '../components/BalancesSheet'
+import QuickCreateSheet from '../components/QuickCreateSheet'
+import { useAiAvailable } from '../components/useAiAvailable'
 
 // zustand selectors must return a stable reference, or React re-renders forever
 const NO_GROUPS: Group[] = []
@@ -80,6 +82,8 @@ export default function Home() {
   const [pick, setPick] = useState(false)
   const [filter, setFilter] = useState<Category | 'all'>('all')
   const [balances, setBalances] = useState(false)
+  const [quick, setQuick] = useState(false)
+  const ai = useAiAvailable()
   const create = (groupId?: string, category?: Category) => {
     setPick(false)
     const p = addProject(groupId, category)
@@ -156,9 +160,15 @@ export default function Home() {
       )}
 
       <BalancesSheet open={balances} onClose={() => setBalances(false)} />
+      <QuickCreateSheet open={quick} onClose={() => setQuick(false)} />
       <Sheet open={pick} onClose={() => setPick(false)} title="開新帳本">
         <div className="stack">
-          <div className="label">這次是什麼？</div>
+          {ai && (
+            <button type="button" className="btn btn--mint btn--lg" onClick={() => { setPick(false); setQuick(true) }}>
+              ✨ 說一句話，AI 幫你開
+            </button>
+          )}
+          <div className="label">{ai ? '或自己選分類' : '這次是什麼？'}</div>
           <div className="cat-grid">
             {CATEGORIES.map((c) => (
               <button key={c.id} type="button" className="cat-btn" onClick={() => create(undefined, c.id)}>

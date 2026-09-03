@@ -5,7 +5,7 @@ import type { Db } from './db.ts'
 import { readFileSync, statSync } from 'node:fs'
 import { renderOg } from './og.ts'
 import type { AiParser } from './ai.ts'
-import { callProvider, isPublicHttpsUrl, type AiFormat } from '../../src/lib/receiptAi.ts'
+import { callChat, callProvider, isPublicHttpsUrl, type AiFormat } from '../../src/lib/receiptAi.ts'
 
 export interface AppOptions {
   db: Db
@@ -414,6 +414,33 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
       return c.json({ error: 'ai_failed' }, 502)
     }
   })
+  // 站方 AI 一般對話（同樣的權限與額度）
+  const readChat = (body: { system?: unknown; user?: unknown; image?: unknown; maxTokens?: unknown }) => {
+    const system = typeof body?.system === 'string' ? body.system.slice(0, 6000) : ''
+    const user = typeof body?.user === 'string' ? body.user.slice(0, 12000) : ''
+    const img = body?.image as { mediaType?: string; base64?: string } | undefined
+    const image = img && typeof img.base64 === 'string' && img.base64.length < 6_000_000 && /^image\/(jpeg|png|webp|gif)$/.test(img.mediaType ?? '') ? { mediaType: img.mediaType as string, base64: img.base64 } : undefined
+    const maxTokens = Math.min(4000, Math.max(100, Number(body?.maxTokens) || 1500))
+    return system && (user || image) ? { system, user, image, maxTokens } : null
+  }
+  app.post('/api/ai/chat', async (c) => {
+    if (!ai?.enabled) return c.json({ error: 'ai_disabled' }, 404)
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    if (!aiAllowedFor(accountId)) return c.json({ error: 'not_allowed', needsCode: !!aiInviteCode }, 403)
+    const st = aiStatusFor(accountId)
+    if (st.remaining <= 0) return c.json({ error: 'quota', quota: aiDailyQuota, used: st.used }, 429)
+    const input = readChat((await c.req.json().catch(() => null)) ?? {})
+    if (!input) return c.json({ error: 'bad_request' }, 400)
+    q.aiBump.run(accountId, dayOf())
+    try {
+      return c.json({ text: await ai.chat(input), remaining: st.remaining - 1 })
+    } catch (e) {
+      console.error('ai chat failed', (e as Error).message.slice(0, 120))
+      return c.json({ error: 'ai_failed' }, 502)
+    }
+  })
+
   // BYOK 代轉：瀏覽器被 CORS 擋住時才會走這裡。金鑰只用於本次請求、不寫入任何地方；只准 https 公網位址。
   const byokLimiter = makeLimiter(60, 3_600_000, now)
   app.post('/api/parse/byok', async (c) => {
@@ -437,6 +464,26 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
       // 不要把金鑰寫進 log：只記錄錯誤訊息前 120 字
       const msg = (e as Error).message ?? 'failed'
       console.error('byok parse failed:', msg.slice(0, 120))
+      return c.json({ error: 'provider_failed', message: msg.slice(0, 200) }, 502)
+    }
+  })
+
+  app.post('/api/ai/byok', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    if (!byokLimiter(clientIp(c.req.raw.headers))) return c.json({ error: 'rate_limited' }, 429)
+    const body = await c.req.json().catch(() => null)
+    const p = body?.provider
+    const format: AiFormat = p?.format === 'anthropic' ? 'anthropic' : 'openai'
+    if (!p || typeof p.baseUrl !== 'string' || typeof p.model !== 'string' || typeof p.apiKey !== 'string' || !p.apiKey || p.apiKey.length > 500) return c.json({ error: 'bad_request' }, 400)
+    if (!isPublicHttpsUrl(p.baseUrl)) return c.json({ error: 'bad_url', reason: 'baseUrl 必須是 https 的公開網址' }, 400)
+    const input = readChat(body ?? {})
+    if (!input) return c.json({ error: 'bad_request' }, 400)
+    try {
+      return c.json({ text: await callChat({ format, baseUrl: p.baseUrl, model: String(p.model).slice(0, 100), apiKey: p.apiKey }, input, { fetchFn: byokFetch }) })
+    } catch (e) {
+      const msg = (e as Error).message ?? 'failed'
+      console.error('byok chat failed:', msg.slice(0, 120))
       return c.json({ error: 'provider_failed', message: msg.slice(0, 200) }, 502)
     }
   })

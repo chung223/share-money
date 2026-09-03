@@ -9,6 +9,9 @@ import ShareLinkSheet from '../components/ShareLinkSheet'
 import ReminderSheet from '../components/ReminderSheet'
 import PaymentsSheet from '../components/PaymentsSheet'
 import SettleSheet from '../components/SettleSheet'
+import { aiChat } from '../lib/ai'
+import { assignSystem, normaliseAssign } from '../lib/aiAssist'
+import { useAiAvailable } from '../components/useAiAvailable'
 import { hasMultiPayer, transferKey, type PersonResult, type Transfer } from '../lib/split'
 import { CATEGORIES, categoryOf, emojiOptions, type CategoryMeta } from '../lib/category'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
@@ -37,6 +40,10 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   const [importOpen, setImportOpen] = useState(false)
   const [paymentsOpen, setPaymentsOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assignHint, setAssignHint] = useState('')
+  const [assignBusy, setAssignBusy] = useState(false)
+  const ai = useAiAvailable()
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const result = useMemo(() => (project ? computeSplit(project, data.baseCurrency) : null), [project, data.baseCurrency])
@@ -60,6 +67,33 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   const cat = categoryOf(p)
   const MODES = modesFor(cat)
   const isPayerOf = (id: string) => (multi ? (p.payments ?? []).some((x) => x.personId === id && x.amount > 0) : id === p.payerId)
+
+  const runAssign = async () => {
+    if (!project) return
+    setAssignBusy(true)
+    try {
+      const items = project.items.filter((it) => it.price !== 0)
+      const user = `品項：\n${items.map((it, i) => `${i}. ${it.name || '（未命名）'} ×${it.qty} ${it.price}`).join('\n')}${assignHint.trim() ? `\n補充說明：${assignHint.trim()}` : ''}`
+      const raw = await aiChat({ system: assignSystem(project.people.map((x) => x.name), project.mode === 'mains' ? 'mains' : 'items'), user, maxTokens: 1200 })
+      const patches = normaliseAssign(raw, items, project.people)
+      updateProject(project.id, (pp) => {
+        if (pp.mode === 'equal') pp.mode = 'items'
+        items.forEach((it, i) => {
+          const target = pp.items.find((x) => x.id === it.id)
+          const patch = patches[i]
+          if (!target || !patch.sharedBy) return
+          target.sharedBy = patch.sharedBy
+          target.kind = pp.mode === 'mains' ? patch.kind ?? 'shared' : target.kind
+        })
+      })
+      setAssignOpen(false)
+      showToast('分好了，看一下有沒有分錯', '✨')
+    } catch (e) {
+      showToast(e instanceof Error ? e.message.slice(0, 100) : 'AI 失敗', '😵')
+    } finally {
+      setAssignBusy(false)
+    }
+  }
 
   const onImport = (r: ImportResult) => {
     set((pp) => {
@@ -213,9 +247,16 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
           <section className="card stack">
             <div className="row between center">
               <div className="section-title">🧾 明細</div>
-              <button type="button" className="btn btn--sm btn--mint" onClick={() => setImportOpen(true)}>
-                📷 掃描 / 匯入
-              </button>
+              <div className="row gap-s">
+                {ai && p.items.some((it) => it.price !== 0) && p.people.length > 1 && (
+                  <button type="button" className="btn btn--sm btn--butter" onClick={() => setAssignOpen(true)}>
+                    ✨ AI 幫我分
+                  </button>
+                )}
+                <button type="button" className="btn btn--sm btn--mint" onClick={() => setImportOpen(true)}>
+                  📷 掃描 / 匯入
+                </button>
+              </div>
             </div>
             {p.items.length === 0 && (
               <p className="muted small">
@@ -360,6 +401,15 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
 
       <ImportSheet open={importOpen} onClose={() => setImportOpen(false)} onImport={onImport} />
       <PaymentsSheet open={paymentsOpen} onClose={() => setPaymentsOpen(false)} p={p} result={result} set={set} />
+      <Sheet open={assignOpen} onClose={() => setAssignOpen(false)} title="✨ AI 幫我分">
+        <div className="stack">
+          <p className="muted small">AI 會看品名猜是誰的{p.mode === 'mains' ? '、哪些是主餐哪些共享' : ''}。可以補一句說明，例如「牛肉麵是小明的，飲料大家分」。{p.mode === 'equal' ? '目前是均攤，分完會切成「各點各的」。' : ''}</p>
+          <input className="input" placeholder="補充說明（選填）" value={assignHint} onChange={(e) => setAssignHint(e.target.value)} />
+          <button type="button" className="btn btn--primary btn--lg" disabled={assignBusy} onClick={runAssign}>
+            {assignBusy ? 'AI 分配中…' : '開始分'}
+          </button>
+        </div>
+      </Sheet>
 
       <Sheet open={menuOpen} onClose={() => { setMenuOpen(false); setConfirmDelete(false) }} title={p.name || cat.unnamed}>
         <div className="stack">
