@@ -19,8 +19,9 @@ Object.defineProperty(window, 'matchMedia', {
 import App from '../App'
 import { useStore, newProject } from '../store'
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear()
+  await useStore.getState().wipe() // fake-indexeddb persists across tests in a file
   location.hash = ''
   vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
     throw new Error('console.error: ' + a.map(String).join(' '))
@@ -31,7 +32,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function boot() {
+async function boot(onboarded = true) {
+  useStore.setState({ prefs: { ...useStore.getState().prefs, onboarded }, tutorialOpen: false })
   render(<App />)
   await act(async () => {
     await new Promise((r) => setTimeout(r, 50))
@@ -99,5 +101,31 @@ describe('pages render without crashing', () => {
     })
     expect(await screen.findByText('還沒還')).toBeTruthy()
     expect(screen.getByText('📣 催款')).toBeTruthy()
+  })
+})
+
+describe('onboarding', () => {
+  it('shows on a fresh device and walks through the steps', async () => {
+    await boot(false)
+    expect(await screen.findByText('開始 →')).toBeTruthy()
+    await act(async () => {
+      screen.getByText('開始 →').click()
+    })
+    expect(await screen.findByText('下一步 →')).toBeTruthy()
+    await act(async () => {
+      screen.getByText('下一步 →').click()
+    })
+    // name is required on step 1; type one and continue -> pay info step, still inside the tutorial
+    const input = screen.getByPlaceholderText('名字') as HTMLInputElement
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, '小賴')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      screen.getByText('下一步 →').click()
+    })
+    expect(await screen.findByText('💳 怎麼收錢（選填）')).toBeTruthy()
+    expect(useStore.getState().data.me.name).toBe('小賴')
   })
 })

@@ -1,7 +1,8 @@
 import { serve } from '@hono/node-server'
 import { join } from 'node:path'
 import { openDb } from './db.ts'
-import { createApp } from './app.ts'
+import { createApp, type PushSender } from './app.ts'
+import webpush from 'web-push'
 
 const PORT = Number(process.env.PORT ?? 3456)
 const DATA_DIR = process.env.DATA_DIR ?? join(import.meta.dirname, '..', 'data')
@@ -9,8 +10,27 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || undefined
 const INACTIVE_DAYS = Number(process.env.INACTIVE_DAYS ?? 180)
 
+let push: PushSender | undefined
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(process.env.VAPID_SUBJECT ?? 'mailto:admin@chung.men', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY)
+  push = {
+    publicKey: process.env.VAPID_PUBLIC_KEY,
+    async send(sub, payload) {
+      try {
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload, { TTL: 86_400, urgency: 'normal' })
+        return true
+      } catch (e) {
+        const code = (e as { statusCode?: number }).statusCode
+        if (code === 404 || code === 410) return false
+        console.error('push error', code, (e as Error).message)
+        return true
+      }
+    },
+  }
+} else console.warn('VAPID keys not set: push disabled')
+
 const db = openDb(join(DATA_DIR, 'banban.db'))
-const { app, purgeExpired, purgeInactive } = createApp({ db, corsOrigin: CORS_ORIGIN, adminToken: ADMIN_TOKEN, inactiveDays: INACTIVE_DAYS })
+const { app, purgeExpired, purgeInactive } = createApp({ db, corsOrigin: CORS_ORIGIN, adminToken: ADMIN_TOKEN, inactiveDays: INACTIVE_DAYS, push })
 
 // 每小時：清過期一週以上的分享連結；刪 INACTIVE_DAYS 天沒同步的帳號（連同資料與分享）
 const housekeeping = () => {

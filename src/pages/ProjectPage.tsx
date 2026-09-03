@@ -9,7 +9,7 @@ import ShareLinkSheet from '../components/ShareLinkSheet'
 import ReminderSheet from '../components/ReminderSheet'
 import PaymentsSheet from '../components/PaymentsSheet'
 import SettleSheet from '../components/SettleSheet'
-import { hasMultiPayer, type PersonResult, type Transfer } from '../lib/split'
+import { hasMultiPayer, transferKey, type PersonResult, type Transfer } from '../lib/split'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
 import { PersonEditor } from './SettingsPage'
 
@@ -762,6 +762,7 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
                   })()}
                 </div>
               </button>
+              {!multi && p.paidNotes?.[transferKey(r.person.id, p.payerId)] && <div className="note-line">💬 {p.paidNotes[transferKey(r.person.id, p.payerId)]}</div>}
               {expanded && (
                 <div className="person-result__lines">
                   {r.lines.map((l, i) => (
@@ -826,6 +827,7 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
                         {t.settled ? '✓ 已轉' : t.paid > 0 ? `差 ${fmtMoney(t.remaining, t.dueCurrency)}` : '還沒'}
                       </button>
                     </span>
+                    {p.paidNotes?.[t.key] && <div className="note-line">💬 {p.paidNotes[t.key]}</div>}
                   </div>
                 )
               })}

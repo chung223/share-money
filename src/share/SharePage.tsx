@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { computeSplit, fmtMoney } from '../lib/split'
-import { decryptSnapshot, parseShareLocation, type ShareSnapshot } from '../lib/share'
+import { decryptSnapshot, encryptNote, parseShareLocation, type ShareSnapshot } from '../lib/share'
 import type { Project } from '../lib/types'
 import { Avatar, Confetti, Mascot } from '../components/ui'
 
@@ -13,6 +13,14 @@ export default function SharePage() {
   const [status, setStatus] = useState<Status>({ kind: 'loading' })
   const [who, setWho] = useState<string | null>(() => (WHO_KEY ? localStorage.getItem(WHO_KEY) : null))
   const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const [myNotes, setMyNotes] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(WHO_KEY + ':notes') || '{}')
+    } catch {
+      return {}
+    }
+  })
   const [toast, setToast] = useState<string | null>(null)
   const [confetti, setConfetti] = useState(false)
 
@@ -88,8 +96,21 @@ export default function SharePage() {
     if (!who || !loc) return
     setBusy(true)
     try {
-      const res = await fetch(`/api/share/${loc.id}/paid`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personId: key, kind }) })
+      const label = nameOf(who)?.name
+      const text = note.trim().slice(0, 200)
+      const enc = kind === 'paid' && text ? await encryptNote(loc.key, text) : undefined
+      const res = await fetch(`/api/share/${loc.id}/paid`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personId: key, kind, note: enc, label }) })
       if (!res.ok) throw new Error('HTTP ' + res.status)
+      const nextNotes = { ...myNotes }
+      if (kind === 'paid' && text) nextNotes[key] = text
+      else delete nextNotes[key]
+      setMyNotes(nextNotes)
+      try {
+        localStorage.setItem(WHO_KEY + ':notes', JSON.stringify(nextNotes))
+      } catch {
+        /* ignore */
+      }
+      setNote('')
       const rest = paid.filter((x) => x !== key && x !== who)
       setStatus({ kind: 'ok', snap, paid: kind === 'paid' ? [...rest, key] : rest })
       if (kind === 'paid') {
@@ -226,15 +247,19 @@ export default function SharePage() {
                       <div className="pill pill--mint center-self">✓ {to?.name} 已確認收到</div>
                     ) : reported ? (
                       <div className="stack-s">
-                        <div className="pill pill--mint center-self">✅ 已回報「我轉了」</div>
+                        <div className="pill pill--mint center-self">✅ 已回報「我轉了」{myNotes[t.key] ? `：${myNotes[t.key]}` : ''}</div>
                         <button type="button" className="btn btn--ghost btn--sm" disabled={busy} onClick={() => report(t.key, 'unpaid')}>
                           按錯了，取消
                         </button>
                       </div>
                     ) : (
-                      <button type="button" className="btn btn--primary btn--lg" disabled={busy} onClick={() => report(t.key, 'paid')}>
-                        💸 我轉了
-                      </button>
+                      <div className="stack-s">
+                        <input className="input" placeholder="備註（選填）：LINE Pay、末五碼 12345…" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} />
+                        <button type="button" className="btn btn--primary btn--lg" disabled={busy} onClick={() => report(t.key, 'paid')}>
+                          💸 我轉了
+                        </button>
+                        <p className="muted small center-text">備註只有 {snap.ownerName} 看得到（用連結裡的金鑰加密）。</p>
+                      </div>
                     )}
                   </div>
                 )

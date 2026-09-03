@@ -88,6 +88,9 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 
 ## 第二階段：通知與排程
 
+- ✅ 2026-09-03 Web Push（VAPID，`push_subs` 表，`/api/push/*`，自訂 SW `src/sw.ts` injectManifest）：「我轉了」即時推播。朋友備註以分享金鑰加密存在 `share_events.note`。
+- ⏳ 每週一催款摘要推播（可直接用同一套 push，資料是密文所以要由前端在同步時產生摘要）。
+
 - Telegram bot（最簡單）或 LINE Messaging API（LINE Notify 已於 2025 停止服務）。
 - crontab 每週一早上：列出還沒還的人與金額，推播給自己；可選一鍵轉發給對方。
 - 有人按「我轉了」立即推播。

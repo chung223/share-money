@@ -6,10 +6,19 @@ const T0 = 1_700_000_000_000
 function setup(t0 = T0) {
   let t = t0
   const db = openDb(':memory:')
-  const { app, purgeExpired, purgeInactive } = createApp({ db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30 })
+  const sent: { endpoint: string; payload: string }[] = []
+  const dead = new Set<string>()
+  const push = {
+    publicKey: 'PUB',
+    async send(sub: { endpoint: string }, payload: string) {
+      sent.push({ endpoint: sub.endpoint, payload })
+      return !dead.has(sub.endpoint)
+    },
+  }
+  const { app, purgeExpired, purgeInactive } = createApp({ db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30, push })
   const call = (path: string, init: RequestInit = {}, token?: string, ip = '1.2.3.4') =>
     app.request(path, { ...init, headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
-  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive }
+  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function body(r: Response | Promise<Response>): Promise<any> {
@@ -126,5 +135,33 @@ describe('multi-user hardening', () => {
     expect((await call('/api/admin/stats', {}, 'nope')).status).toBe(401)
     const s = await body(call('/api/admin/stats', {}, 'admin-secret'))
     expect(s).toMatchObject({ accounts: 1, active_7d: 1, blobs: 1, blob_bytes: 3, shares: 0 })
+  })
+})
+
+describe('notes + push', () => {
+  it('stores note/label on paid events and pushes to the owner', async () => {
+    const { call, sent, dead } = setup()
+    const { id } = await body(call('/api/share', post({ projectId: 'p1', cipher: 'enc', expiresAt: T0 + 86_400_000 }), A))
+    expect((await body(call('/api/push/vapid'))).publicKey).toBe('PUB')
+    expect((await call('/api/push/subscribe', post({ endpoint: 'https://push.example/abc', keys: { p256dh: 'k', auth: 'a' } }), A)).status).toBe(200)
+    expect((await call('/api/push/subscribe', post({ endpoint: 'nope', keys: { p256dh: 'k', auth: 'a' } }), A)).status).toBe(400)
+    expect((await body(call('/api/sync', {}, A))).push).toEqual({ enabled: true })
+    await call(`/api/share/${id}/paid`, post({ personId: 'x1', note: 'ENC(末五碼 12345)', label: '小明' }))
+    await new Promise((r) => setTimeout(r, 5))
+    expect(sent).toHaveLength(1)
+    expect(JSON.parse(sent[0].payload).body).toContain('小明')
+    const s = await body(call('/api/sync', {}, A))
+    expect(s.events[0]).toMatchObject({ note: 'ENC(末五碼 12345)', label: '小明' })
+    // test push, then a dead endpoint gets dropped
+    expect((await body(call('/api/push/test', post({}), A))).sent).toBe(1)
+    dead.add('https://push.example/abc')
+    await call(`/api/share/${id}/paid`, post({ personId: 'x1' }))
+    await new Promise((r) => setTimeout(r, 5))
+    expect((await body(call('/api/sync', {}, A))).push).toEqual({ enabled: false })
+    expect((await call('/api/push/test', post({}), A)).status).toBe(400)
+    // unsubscribe path
+    await call('/api/push/subscribe', post({ endpoint: 'https://push.example/xyz', keys: { p256dh: 'k', auth: 'a' } }), A)
+    await call('/api/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint: 'https://push.example/xyz' }) }, A)
+    expect((await body(call('/api/sync', {}, A))).push).toEqual({ enabled: false })
   })
 })

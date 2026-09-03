@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { AppData, Extra, Item, Person, Project, SplitMode } from './lib/types'
 import { PALETTE, PERSON_EMOJIS } from './lib/types'
 import { api, apiBase, applyShareEvents, canon, decryptWithKey, deriveSyncKeys, encryptWithKey, forUpload, generateSecret, mergeData, parseSecret, SyncError, type SyncKeys } from './lib/sync'
-import { buildSnapshot, encryptSnapshot, generateShareKey } from './lib/share'
+import { buildSnapshot, decryptNote, encryptSnapshot, generateShareKey } from './lib/share'
 import { clearSyncMeta, loadSyncMeta, saveSyncMeta } from './lib/syncMeta'
 import {
   createPinSession,
@@ -84,6 +84,8 @@ interface State {
   session: Session
   toast: { id: number; text: string; emoji?: string } | null
   sync: SyncState
+  tutorialOpen: boolean
+  setTutorialOpen: (v: boolean) => void
 
   init: () => Promise<void>
   unlock: (pin: string) => Promise<boolean>
@@ -161,6 +163,8 @@ export const useStore = create<State>((set, get) => ({
   session: { key: null, salt: null },
   toast: null,
   sync: { status: 'off', lastSyncAt: loadSyncMeta().lastSyncAt, error: null, dirty: loadSyncMeta().dirty },
+  tutorialOpen: false,
+  setTutorialOpen: (v) => set({ tutorialOpen: v }),
 
   init: async () => {
     const blob = await readBlob()
@@ -377,14 +381,20 @@ export const useStore = create<State>((set, get) => ({
         const eventIds: number[] = []
         if (remote.events.length) {
           data = structuredClone(data)
+          // notes are encrypted with the share key; decrypt what we can before applying
+          for (const e of remote.events) {
+            if (!e.note) continue
+            const key = data.projects.find((x) => x.id === e.projectId)?.share?.key
+            e.noteText = key ? await decryptNote(key, e.note) : null
+          }
           eventIds.push(...applyShareEvents(data, remote.events))
           changed = true
           const paid = remote.events.filter((e) => e.kind === 'paid')
           if (paid.length) {
             const last = paid[paid.length - 1]
             const p = data.projects.find((x) => x.id === last.projectId)
-            const who = p?.people.find((x) => x.id === last.personId)
-            toastMsg = who ? `${who.emoji} ${who.name} 說已經轉帳了` + (paid.length > 1 ? `（共 ${paid.length} 筆）` : '') : null
+            const who = p?.people.find((x) => x.id === last.personId.split('_')[0])
+            toastMsg = who ? `${who.emoji} ${who.name} 說已經轉帳了` + (last.noteText ? `：${last.noteText}` : '') + (paid.length > 1 ? `（共 ${paid.length} 筆）` : '') : null
           }
         }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyShareEvents, decryptWithKey, deriveSyncKeys, encryptWithKey, generateSecret, mergeData, parseSecret } from './sync'
-import { buildSnapshot, decryptSnapshot, encryptSnapshot, generateShareKey, parseShareLocation } from './share'
+import { buildSnapshot, decryptNote, decryptSnapshot, encryptNote, encryptSnapshot, generateShareKey, parseShareLocation } from './share'
 import type { AppData, Project } from './types'
 
 const me = { id: 'me', name: '我', emoji: '🐥', color: 'butter' }
@@ -34,6 +34,9 @@ describe('secret + crypto', () => {
     expect((await decryptSnapshot(key, c)).payInfo?.bankCode).toBe('808')
     expect(parseShareLocation({ pathname: '/s/abc123', hash: '#' + key })).toEqual({ id: 'abc123', key })
     expect(parseShareLocation({ pathname: '/s/abc123', hash: '' })).toBeNull()
+    const n = await encryptNote(key, '末五碼 12345')
+    expect(await decryptNote(key, n)).toBe('末五碼 12345')
+    expect(await decryptNote(generateShareKey(), n)).toBeNull()
   })
 })
 
@@ -88,5 +91,12 @@ describe('applyShareEvents', () => {
       { id: 2, shareId: 's', projectId: 'a', personId: 'x_zz', kind: 'paid', createdAt: 50 },
     ])
     expect(d.projects[0].settled).toEqual({ x_me: true })
+  })
+  it('keeps decrypted notes per transfer and drops them on unpaid', () => {
+    const d = data([proj('a', 10, { people: [me, { ...me, id: 'x' }] })])
+    applyShareEvents(d, [{ id: 1, shareId: 's', projectId: 'a', personId: 'x', kind: 'paid', createdAt: 50, noteText: 'LINE Pay 末五碼 12345' }])
+    expect(d.projects[0].paidNotes).toEqual({ x: 'LINE Pay 末五碼 12345' })
+    applyShareEvents(d, [{ id: 2, shareId: 's', projectId: 'a', personId: 'x', kind: 'unpaid', createdAt: 60 }])
+    expect(d.projects[0].paidNotes).toEqual({})
   })
 })

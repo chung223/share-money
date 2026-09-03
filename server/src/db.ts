@@ -39,7 +39,22 @@ CREATE TABLE IF NOT EXISTS share_events (
   acked INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS share_events_share ON share_events(share_id, acked);
+CREATE TABLE IF NOT EXISTS push_subs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  endpoint TEXT UNIQUE NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS push_subs_account ON push_subs(account_id);
 `
+
+/** Columns added after the first release; ALTER is idempotent via PRAGMA check. */
+const MIGRATIONS: [table: string, column: string, ddl: string][] = [
+  ['share_events', 'note', 'ALTER TABLE share_events ADD COLUMN note TEXT'],
+  ['share_events', 'label', 'ALTER TABLE share_events ADD COLUMN label TEXT'],
+]
 
 export function openDb(file: string): Db {
   if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
@@ -48,5 +63,9 @@ export function openDb(file: string): Db {
   raw.exec('PRAGMA foreign_keys = ON')
   raw.exec('PRAGMA busy_timeout = 3000')
   raw.exec(SCHEMA)
+  for (const [table, column, ddl] of MIGRATIONS) {
+    const cols = raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+    if (!cols.some((c) => c.name === column)) raw.exec(ddl)
+  }
   return { raw, close: () => raw.close() }
 }

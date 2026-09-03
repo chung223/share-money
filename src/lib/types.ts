@@ -67,6 +67,8 @@ export interface Project {
   settled: Record<string, boolean>
   /** Partial repayments per transfer key, in the transfer's due currency (see split.ts Transfer). */
   partial?: Record<string, number>
+  /** Notes friends attached when tapping「我轉了」on the share page (e.g. LINE Pay, 末五碼), per transfer key. */
+  paidNotes?: Record<string, string>
   /** Round each person's amount up to a multiple of 5 / 10 (single-payer only). 0/undefined = off. */
   rounding?: 0 | 5 | 10
   note?: string

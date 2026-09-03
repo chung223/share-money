@@ -11,6 +11,19 @@ export interface AppOptions {
   adminToken?: string
   /** Accounts not seen for this many days are deleted (with their blob and shares). */
   inactiveDays?: number
+  /** Web Push sender. Unset = push endpoints return 404. */
+  push?: PushSender
+}
+
+export interface PushSubscriptionRow {
+  endpoint: string
+  p256dh: string
+  auth: string
+}
+export interface PushSender {
+  publicKey: string
+  /** Resolves to false when the subscription is gone (404/410) and should be dropped. */
+  send(sub: PushSubscriptionRow, payload: string): Promise<boolean>
 }
 
 const SYNC_MAX_BYTES = 2 * 1024 * 1024
@@ -19,6 +32,8 @@ const SHARE_MAX_DAYS = 180
 const TOKEN_RE = /^[A-Za-z0-9_-]{32,128}$/
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 const RATE_LIMITED = Symbol('rate_limited')
+const NOTE_MAX = 2000 // encrypted JSON, so a bit more than the 200-char plaintext
+const LABEL_MAX = 40
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
@@ -45,7 +60,7 @@ function makeLimiter(limit: number, windowMs: number, now: () => number) {
 
 type Vars = { accountId: string }
 
-export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180 }: AppOptions) {
+export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push }: AppOptions) {
   const app = new Hono<{ Variables: Vars }>()
   const q = {
     accountByHash: db.raw.prepare('SELECT id FROM accounts WHERE token_hash = ?'),
@@ -65,10 +80,16 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     paidPersons: db.raw.prepare(
       "SELECT person_id, kind FROM share_events WHERE share_id = ? AND id IN (SELECT MAX(id) FROM share_events WHERE share_id = ? GROUP BY person_id)",
     ),
-    insertEvent: db.raw.prepare('INSERT INTO share_events (share_id, person_id, kind, created_at) VALUES (?, ?, ?, ?)'),
+    insertEvent: db.raw.prepare('INSERT INTO share_events (share_id, person_id, kind, created_at, note, label) VALUES (?, ?, ?, ?, ?, ?)'),
     pendingEvents: db.raw.prepare(
-      'SELECT e.id, e.share_id, s.project_id, e.person_id, e.kind, e.created_at FROM share_events e JOIN shares s ON s.id = e.share_id WHERE s.account_id = ? AND e.acked = 0 ORDER BY e.id',
+      'SELECT e.id, e.share_id, s.project_id, e.person_id, e.kind, e.created_at, e.note, e.label FROM share_events e JOIN shares s ON s.id = e.share_id WHERE s.account_id = ? AND e.acked = 0 ORDER BY e.id',
     ),
+    subsByAccount: db.raw.prepare('SELECT endpoint, p256dh, auth FROM push_subs WHERE account_id = ?'),
+    upsertSub: db.raw.prepare(
+      'INSERT INTO push_subs (account_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET account_id = excluded.account_id, p256dh = excluded.p256dh, auth = excluded.auth',
+    ),
+    deleteSub: db.raw.prepare('DELETE FROM push_subs WHERE endpoint = ?'),
+    deleteSubOwned: db.raw.prepare('DELETE FROM push_subs WHERE endpoint = ? AND account_id = ?'),
     ackEvent: db.raw.prepare('UPDATE share_events SET acked = 1 WHERE id = ? AND share_id IN (SELECT id FROM shares WHERE account_id = ?)'),
     purgeExpired: db.raw.prepare('DELETE FROM shares WHERE expires_at < ?'),
     purgeInactive: db.raw.prepare('DELETE FROM accounts WHERE last_seen_at < ?'),
@@ -82,7 +103,8 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
         (SELECT COUNT(*) FROM shares) AS shares,
         (SELECT COUNT(*) FROM shares WHERE expires_at > ?) AS shares_live,
         (SELECT COUNT(*) FROM share_events) AS events,
-        (SELECT COUNT(*) FROM share_events WHERE acked = 0) AS events_pending`,
+        (SELECT COUNT(*) FROM share_events WHERE acked = 0) AS events_pending,
+        (SELECT COUNT(*) FROM push_subs) AS push_subs`,
     ),
   }
   const publicLimiter = makeLimiter(60, 60_000, now)
@@ -133,13 +155,14 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
   app.get('/api/sync', (c) => {
     const accountId = c.get('accountId')
     const blob = q.blob.get(accountId) as { version: number; cipher: string; updated_at: number } | undefined
-    const events = q.pendingEvents.all(accountId) as { id: number; share_id: string; project_id: string; person_id: string; kind: string; created_at: number }[]
+    const events = q.pendingEvents.all(accountId) as { id: number; share_id: string; project_id: string; person_id: string; kind: string; created_at: number; note: string | null; label: string | null }[]
     const shares = q.sharesByAccount.all(accountId) as { id: string; project_id: string; expires_at: number; updated_at: number }[]
     return c.json({
       version: blob?.version ?? 0,
       cipher: blob?.cipher ?? null,
       updatedAt: blob?.updated_at ?? null,
-      events: events.map((e) => ({ id: e.id, shareId: e.share_id, projectId: e.project_id, personId: e.person_id, kind: e.kind, createdAt: e.created_at })),
+      events: events.map((e) => ({ id: e.id, shareId: e.share_id, projectId: e.project_id, personId: e.person_id, kind: e.kind, createdAt: e.created_at, note: e.note, label: e.label })),
+      push: push ? { enabled: (q.subsByAccount.all(accountId) as unknown[]).length > 0 } : null,
       shares: shares.map((s) => ({ id: s.id, projectId: s.project_id, expiresAt: s.expires_at, updatedAt: s.updated_at })),
     })
   })
@@ -219,11 +242,58 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const body = await c.req.json().catch(() => null)
     if (!ID_RE.test(id) || !body || typeof body.personId !== 'string' || !ID_RE.test(body.personId)) return c.json({ error: 'bad_request' }, 400)
     const kind = body.kind === 'unpaid' ? 'unpaid' : 'paid'
-    const row = q.shareById.get(id) as { expires_at: number } | undefined
+    const note = typeof body.note === 'string' && body.note.length > 0 && body.note.length <= NOTE_MAX ? body.note : null
+    const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, LABEL_MAX) : null
+    const row = q.shareById.get(id) as { account_id: string; expires_at: number } | undefined
     if (!row) return c.json({ error: 'not_found' }, 404)
     if (row.expires_at < now()) return c.json({ error: 'expired' }, 410)
-    q.insertEvent.run(id, body.personId, kind, now())
+    q.insertEvent.run(id, body.personId, kind, now(), note, label)
+    if (kind === 'paid' && push) notifyOwner(row.account_id, `${label ?? '有人'} 說已經轉帳了 💸`)
     return c.json({ ok: true })
+  })
+
+  // --- web push ---
+  const notifyOwner = (accountId: string, body: string) => {
+    if (!push) return
+    const subs = q.subsByAccount.all(accountId) as unknown as PushSubscriptionRow[]
+    const payload = JSON.stringify({ title: '반반 BanBan', body, url: '/', tag: 'banban-paid' })
+    for (const sub of subs) {
+      push
+        .send(sub, payload)
+        .then((alive) => {
+          if (!alive) q.deleteSub.run(sub.endpoint)
+        })
+        .catch((e) => console.error('push failed', e))
+    }
+  }
+  app.get('/api/push/vapid', (c) => (push ? c.json({ publicKey: push.publicKey }) : c.json({ error: 'not_found' }, 404)))
+  app.post('/api/push/subscribe', async (c) => {
+    if (!push) return c.json({ error: 'not_found' }, 404)
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const body = await c.req.json().catch(() => null)
+    const ep = body?.endpoint
+    const keys = body?.keys
+    if (typeof ep !== 'string' || !/^https:\/\/\S{10,2000}$/.test(ep) || typeof keys?.p256dh !== 'string' || typeof keys?.auth !== 'string') return c.json({ error: 'bad_request' }, 400)
+    q.upsertSub.run(accountId, ep, keys.p256dh, keys.auth, now())
+    return c.json({ ok: true })
+  })
+  app.delete('/api/push/subscribe', async (c) => {
+    if (!push) return c.json({ error: 'not_found' }, 404)
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const body = await c.req.json().catch(() => null)
+    if (typeof body?.endpoint === 'string') q.deleteSubOwned.run(body.endpoint, accountId)
+    return c.json({ ok: true })
+  })
+  app.post('/api/push/test', (c) => {
+    if (!push) return c.json({ error: 'not_found' }, 404)
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const n = (q.subsByAccount.all(accountId) as unknown[]).length
+    if (!n) return c.json({ error: 'no_subscription' }, 400)
+    notifyOwner(accountId, '推播沒問題，之後朋友按「我轉了」會通知你 🔔')
+    return c.json({ ok: true, sent: n })
   })
 
   app.notFound((c) => c.json({ error: 'not_found' }, 404))

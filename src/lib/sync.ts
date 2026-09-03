@@ -87,6 +87,12 @@ export interface ShareEvent {
   personId: Id
   kind: 'paid' | 'unpaid'
   createdAt: number
+  /** Encrypted with the share key (see share.ts). */
+  note?: string | null
+  /** Friend's display name as typed on the share page (plaintext, for push text only). */
+  label?: string | null
+  /** Filled in by the client after decrypting `note`. */
+  noteText?: string | null
 }
 export interface RemoteState {
   version: number
@@ -94,6 +100,7 @@ export interface RemoteState {
   updatedAt: number | null
   events: ShareEvent[]
   shares: { id: string; projectId: Id; expiresAt: number; updatedAt: number }[]
+  push?: { enabled: boolean } | null
 }
 
 export class SyncError extends Error {
@@ -155,6 +162,21 @@ export const api = {
   async unshare(base: string, token: string, id: string) {
     await req(base, `/api/share/${id}`, { method: 'DELETE', token })
   },
+  async vapidKey(base: string): Promise<string | null> {
+    const r = await req(base, '/api/push/vapid')
+    return r.ok ? ((await r.json()).publicKey as string) : null
+  },
+  async pushSubscribe(base: string, token: string, sub: PushSubscriptionJSON) {
+    const r = await req(base, '/api/push/subscribe', { method: 'POST', token, json: sub })
+    if (!r.ok) throw new SyncError('server', `HTTP ${r.status}`)
+  },
+  async pushUnsubscribe(base: string, token: string, endpoint: string) {
+    await req(base, '/api/push/subscribe', { method: 'DELETE', token, json: { endpoint } })
+  },
+  async pushTest(base: string, token: string) {
+    const r = await req(base, '/api/push/test', { method: 'POST', token, json: {} })
+    if (!r.ok) throw new SyncError('server', r.status === 400 ? '這台還沒訂閱推播' : `HTTP ${r.status}`)
+  },
 }
 
 // ---------- merge ----------
@@ -215,6 +237,8 @@ export function applyShareEvents(data: AppData, events: ShareEvent[]): number[] 
     const ids = e.personId.split('_')
     if (!ids.every((id) => p.people.some((x) => x.id === id))) continue
     p.settled[e.personId] = e.kind === 'paid'
+    if (e.kind === 'paid' && e.noteText) p.paidNotes = { ...(p.paidNotes ?? {}), [e.personId]: e.noteText }
+    else if (e.kind === 'unpaid' && p.paidNotes) delete p.paidNotes[e.personId]
     p.updatedAt = Math.max(p.updatedAt, e.createdAt)
   }
   return consumed

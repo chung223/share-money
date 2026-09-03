@@ -57,6 +57,9 @@ export default defineConfig({
     sharePages(),
     versionFile(),
     VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       registerType: 'prompt',
       includeAssets: ['icon.svg', 'apple-touch-icon.png', 'mascot.svg'],
       manifest: {
@@ -75,25 +78,10 @@ export default defineConfig({
           { src: 'pwa-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
-      workbox: {
+      injectManifest: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         globIgnores: ['**/version.json'],
-        // Share pages and the API are never the app shell.
-        navigateFallbackDenylist: [/^\/s\//, /^\/api\//],
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-        runtimeCaching: [
-          {
-            // Tesseract worker/core/language data: cache once, reuse offline.
-            urlPattern: ({ url }) => url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'tessdata.projectnaptha.com',
-            handler: 'CacheFirst',
-            options: { cacheName: 'ocr-assets', expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 90 } },
-          },
-          {
-            urlPattern: ({ url }) => url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com',
-            handler: 'StaleWhileRevalidate',
-            options: { cacheName: 'fonts' },
-          },
-        ],
       },
     }),
   ],

@@ -1617,3 +1617,55 @@ button.avatar:active {
   font-weight: 800;
   z-index: 40;
 }
+.note-line {
+  font-size: 13px;
+  color: var(--c-lavender-ink);
+  background: var(--c-lavender);
+  border-radius: 10px;
+  padding: 6px 10px;
+  margin-top: 4px;
+}
+.onboarding {
+  max-width: 520px;
+  margin: 0 auto;
+  gap: 18px;
+}
+.onboarding__dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding-top: 8px;
+}
+.onboarding__dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line);
+}
+.onboarding__dots span.is-on {
+  background: var(--primary);
+  width: 22px;
+}
+.onboarding__hero {
+  padding-top: 24px;
+  text-align: center;
+}
+.onboarding__title {
+  font-size: 34px;
+  font-weight: 900;
+  margin: 0;
+}
+.onboarding__sub {
+  margin: -8px 0 0;
+  color: var(--muted);
+  font-weight: 700;
+}
+.onboarding__h2 {
+  font-size: 22px;
+  font-weight: 900;
+  margin: 0;
+}
+.onboarding__tip-emoji {
+  font-size: 28px;
+  line-height: 1;
+}

@@ -9,6 +9,7 @@ import SyncSection from '../components/SyncSection'
 import PayInfoSection from '../components/PayInfoSection'
 import GroupsSection from '../components/GroupsSection'
 import UpdateSection from '../components/UpdateSection'
+import PushSection from '../components/PushSection'
 
 export function PersonEditor({ person, onChange, onDelete, title }: { person: Person; onChange: (p: Person) => void; onDelete?: () => void; title: string }) {
   return (
@@ -45,6 +46,7 @@ export default function SettingsPage() {
   const importData = useStore((s) => s.importData)
   const wipe = useStore((s) => s.wipe)
   const showToast = useStore((s) => s.showToast)
+  const setTutorialOpen = useStore((s) => s.setTutorialOpen)
 
   const [pinStep, setPinStep] = useState<null | 'new' | 'confirm'>(null)
   const [pinFirst, setPinFirst] = useState('')
@@ -152,6 +154,7 @@ export default function SettingsPage() {
         </section>
 
         <SyncSection />
+        <PushSection />
         <PayInfoSection />
 
         <section className="card stack">
@@ -249,6 +252,11 @@ export default function SettingsPage() {
           )}
         </section>
 
+        <p className="muted small center-text">
+          <button type="button" className="link" onClick={() => setTutorialOpen(true)}>
+            📖 重看新手教學
+          </button>
+        </p>
         <p className="muted small center-text">
           반반 BanBan · 資料存在你的裝置，同步時先加密 · <a href="https://github.com/chung223/share-money" target="_blank" rel="noreferrer">GitHub</a>
         </p>

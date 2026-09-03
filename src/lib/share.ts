@@ -34,6 +34,19 @@ export async function decryptSnapshot(key: string, cipher: string) {
   return decryptWithKey<ShareSnapshot>(await importKey(key), cipher)
 }
 
+/** Friend-side: the note travels encrypted with the share key, so only the owner can read it. */
+export async function encryptNote(key: string, note: string) {
+  return encryptWithKey(await importKey(key), { note })
+}
+export async function decryptNote(key: string, cipher: string): Promise<string | null> {
+  try {
+    const v = await decryptWithKey<{ note?: string }>(await importKey(key), cipher)
+    return typeof v.note === 'string' ? v.note.slice(0, 200) : null
+  } catch {
+    return null
+  }
+}
+
 export function buildSnapshot(project: Project, baseCurrency: string, ownerName: string, payInfo?: PayInfo, ownerId?: string): ShareSnapshot {
   const { share: _share, ...rest } = project
   return { v: 1, project: rest, baseCurrency, payInfo, ownerName, ownerId, sharedAt: Date.now() }
