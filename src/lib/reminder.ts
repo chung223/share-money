@@ -31,18 +31,20 @@ export interface ReminderInput {
   /** Override the amount (multi-payer: what this person owes *you*). Defaults to their share. */
   amount?: number
   baseAmount?: number | null
+  /** Fully formatted amount (e.g. remaining after a partial repayment); wins over amount/baseAmount. */
+  amountText?: string
   baseCurrency: string
   payInfo?: PayInfo
   shareUrl?: string | null
   tone: Tone
 }
 
-export function reminderText({ project: p, person: r, amount, baseAmount, baseCurrency, payInfo, shareUrl, tone }: ReminderInput): string {
+export function reminderText({ project: p, person: r, amount, baseAmount, amountText, baseCurrency, payInfo, shareUrl, tone }: ReminderInput): string {
   const name = r.person.name
   const foreign = p.currency !== baseCurrency
   const a = amount ?? r.totalRounded
   const b = amount === undefined ? r.baseTotal : (baseAmount ?? null)
-  const amt = fmtMoney(a, p.currency) + (foreign && b != null ? `（約 ${fmtMoney(b, baseCurrency)}）` : '')
+  const amt = amountText ?? fmtMoney(a, p.currency) + (foreign && b != null ? `（約 ${fmtMoney(b, baseCurrency)}）` : '')
   const what = `${fmtDateShort(p.date)} ${p.emoji}${p.name || '那餐'}`
   const pay = payLines(payInfo)
   const lines: string[] = []

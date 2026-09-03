@@ -3,11 +3,12 @@ import { newItem, newPerson, uid, useStore } from '../store'
 import { navigate } from '../router'
 import { computeSplit, fmtMoney, itemTotal, resolveSharers, summaryText } from '../lib/split'
 import { fetchRate } from '../lib/rates'
-import { CURRENCIES, PROJECT_EMOJIS, currencyMeta, type Extra, type Item, type Person, type Project, type SplitMode } from '../lib/types'
+import { CURRENCIES, PROJECT_EMOJIS, currencyMeta, type Extra, type Group, type Item, type Person, type Project, type SplitMode } from '../lib/types'
 import { Avatar, Confetti, EmojiPicker, Empty, MoneyInput, Segmented, Sheet } from '../components/ui'
 import ShareLinkSheet from '../components/ShareLinkSheet'
 import ReminderSheet from '../components/ReminderSheet'
 import PaymentsSheet from '../components/PaymentsSheet'
+import SettleSheet from '../components/SettleSheet'
 import { hasMultiPayer, type PersonResult, type Transfer } from '../lib/split'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
 import { PersonEditor } from './SettingsPage'
@@ -35,7 +36,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
-  const result = useMemo(() => (project ? computeSplit(project) : null), [project])
+  const result = useMemo(() => (project ? computeSplit(project, data.baseCurrency) : null), [project, data.baseCurrency])
 
   if (!project || !result) {
     return (
@@ -149,6 +150,18 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
               </select>
             </div>
             {foreign && <RateRow p={p} base={base} set={set} />}
+            {!multi && (
+              <>
+                <div className="label">每人金額取整（總計不變，多收的會標出來）</div>
+                <div className="chip-row">
+                  {([0, 5, 10] as const).map((v) => (
+                    <button key={v} type="button" className={`chip ${(p.rounding ?? 0) === v ? 'is-on' : ''}`} onClick={() => set((pp) => (pp.rounding = v))}>
+                      {v === 0 ? '不取整' : `進位到 ${v}`}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </section>
 
           {/* Mode */}
@@ -255,7 +268,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
         />
       </Sheet>
 
-      <PeopleSheet open={peopleOpen} onClose={() => setPeopleOpen(false)} p={p} friends={data.friends} me={data.me} set={set} onSaveFriend={(f) => update((d) => d.friends.push(f))} />
+      <PeopleSheet open={peopleOpen} onClose={() => setPeopleOpen(false)} p={p} friends={data.friends} me={data.me} groups={data.groups ?? []} set={set} onSaveFriend={(f) => update((d) => d.friends.push(f))} />
 
       <Sheet open={!!editPerson} onClose={() => setEditPerson(null)} title="這位是…">
         {editPerson && (
@@ -554,12 +567,20 @@ function ExtraRow({ extra, p, set }: { extra: Extra; p: Project; set: (fn: (p: P
 
 /* ---------------- People sheet ---------------- */
 
-function PeopleSheet({ open, onClose, p, friends, me, set, onSaveFriend }: { open: boolean; onClose: () => void; p: Project; friends: Person[]; me: Person; set: (fn: (p: Project) => void) => void; onSaveFriend: (f: Person) => void }) {
+function PeopleSheet({ open, onClose, p, friends, me, groups, set, onSaveFriend }: { open: boolean; onClose: () => void; p: Project; friends: Person[]; me: Person; groups: Group[]; set: (fn: (p: Project) => void) => void; onSaveFriend: (f: Person) => void }) {
   const [name, setName] = useState('')
   const [remember, setRemember] = useState(true)
   const inProject = new Set(p.people.map((x) => x.id))
   const candidates = [me, ...friends].filter((f) => !inProject.has(f.id))
   const add = (person: Person) => set((pp) => pp.people.push(person))
+  const addGroup = (g: Group) =>
+    set((pp) => {
+      const have = new Set(pp.people.map((x) => x.id))
+      for (const id of g.personIds) {
+        const f = [me, ...friends].find((x) => x.id === id)
+        if (f && !have.has(id)) pp.people.push(f)
+      }
+    })
   const addNew = () => {
     const n = name.trim()
     if (!n) return
@@ -571,6 +592,15 @@ function PeopleSheet({ open, onClose, p, friends, me, set, onSaveFriend }: { ope
   return (
     <Sheet open={open} onClose={onClose} title="加人">
       <div className="stack">
+        {groups.length > 0 && (
+          <div className="chip-row">
+            {groups.map((g) => (
+              <button key={g.id} type="button" className="chip" onClick={() => addGroup(g)}>
+                {g.emoji} {g.name}
+              </button>
+            ))}
+          </div>
+        )}
         {candidates.length > 0 && (
           <>
             <div className="label">點一下加入</div>
@@ -605,13 +635,14 @@ function PeopleSheet({ open, onClose, p, friends, me, set, onSaveFriend }: { ope
 /* ---------------- Result ---------------- */
 
 function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: Project) => void) => void }) {
-  const result = useMemo(() => computeSplit(p), [p])
+  const result = useMemo(() => computeSplit(p, base), [p, base])
   const showToast = useStore((s) => s.showToast)
   const meId = useStore((s) => s.data.me.id)
   const [open, setOpen] = useState<string | null>(null)
   const [confetti, setConfetti] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
-  const [remind, setRemind] = useState<{ person: PersonResult; amount?: number; baseAmount?: number | null } | null>(null)
+  const [remind, setRemind] = useState<{ person: PersonResult; amount?: number; baseAmount?: number | null; amountText?: string } | null>(null)
+  const [settle, setSettle] = useState<Transfer | null>(null)
   const foreign = p.currency !== base
   const transfers = result.transfers
   const allSettled = transfers.length > 0 && transfers.every((t) => t.settled)
@@ -619,25 +650,35 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
   const nameOf = (id: string) => p.people.find((x) => x.id === id)
   const multi = result.multiPayer
 
-  const toggleTransfer = (t: Transfer) => {
-    const willBeAll = transfers.every((x) => (x.key === t.key ? !x.settled : x.settled))
-    set((pp) => {
-      pp.settled[t.key] = !t.settled
-      if (t.to === pp.payerId) delete pp.settled[t.from] // migrate legacy key
-    })
-    if (willBeAll) {
+  const prevSettled = useRef(transfers.filter((t) => t.settled).length)
+  useEffect(() => {
+    const n = transfers.filter((t) => t.settled).length
+    if (transfers.length > 0 && n === transfers.length && prevSettled.current < n) {
       setConfetti(true)
-      setTimeout(() => setConfetti(false), 2600)
+      const id = setTimeout(() => setConfetti(false), 2600)
+      prevSettled.current = n
+      return () => clearTimeout(id)
     }
-  }
+    prevSettled.current = n
+  }, [transfers])
   const toggleSettled = (personId: string) => {
     const t = transfers.find((x) => x.from === personId && x.to === p.payerId)
-    if (t) toggleTransfer(t)
+    if (t) setSettle(t)
   }
   const remindPerson = (r: PersonResult) => {
-    if (!multi) return setRemind({ person: r })
     const toMe = transfers.filter((t) => t.from === r.person.id && !t.settled && t.to === meId)
     const list = toMe.length ? toMe : transfers.filter((t) => t.from === r.person.id && !t.settled)
+    if (!multi) {
+      const t = list[0]
+      // partial repayment: remind for what is left
+      if (t && t.paid > 0) return setRemind({ person: r, amountText: `${fmtMoney(t.remaining, t.dueCurrency)}（已還 ${fmtMoney(t.paid, t.dueCurrency)}）` })
+      return setRemind({ person: r })
+    }
+    const partial = list.some((t) => t.paid > 0)
+    if (partial || list.every((t) => t.dueCurrency === list[0]?.dueCurrency)) {
+      const remaining = list.reduce((a, t) => a + t.remaining, 0)
+      return setRemind({ person: r, amountText: fmtMoney(remaining, list[0].dueCurrency) })
+    }
     const amount = list.reduce((a, t) => a + t.amount, 0)
     const baseAmount = list.every((t) => t.baseAmount != null) ? list.reduce((a, t) => a + (t.baseAmount ?? 0), 0) : null
     setRemind({ person: r, amount, baseAmount })
@@ -688,6 +729,7 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
               </div>
             )
           )}
+          {result.overcharge > 0 && <div className="total-card__base">每人進位到 {p.rounding}，多收 {fmtMoney(result.overcharge, result.overchargeCurrency)}</div>}
           {multi && result.paymentsDiff !== 0 && (
             <div className="total-card__base">⚠️ 先付金額{result.paymentsDiff > 0 ? '多' : '少'}了 {fmtMoney(Math.abs(result.paymentsDiff), p.currency)}，回明細「誰付了錢」改一下</div>
           )}
@@ -714,6 +756,10 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
                 <div className="right">
                   <div className="person-result__amt">{fmtMoney(r.totalRounded, p.currency)}</div>
                   {foreign && r.baseTotal != null && <div className="muted small">≈ {fmtMoney(r.baseTotal, base)}</div>}
+                  {(() => {
+                    const t = !multi ? transfers.find((x) => x.from === r.person.id) : null
+                    return t && !t.settled && t.paid > 0 ? <div className="small c-text-pink">已還 {fmtMoney(t.paid, t.dueCurrency)} · 差 {fmtMoney(t.remaining, t.dueCurrency)}</div> : null
+                  })()}
                 </div>
               </button>
               {expanded && (
@@ -776,8 +822,8 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
                     <span className="row gap-s center">
                       <span className="strong">{fmtMoney(t.amount, p.currency)}</span>
                       {foreign && t.baseAmount != null && <span className="muted small">≈ {fmtMoney(t.baseAmount, base)}</span>}
-                      <button type="button" className={`btn btn--sm ${t.settled ? 'btn--mint' : 'btn--ghost'}`} onClick={() => toggleTransfer(t)}>
-                        {t.settled ? '✓ 已轉' : '還沒'}
+                      <button type="button" className={`btn btn--sm ${t.settled ? 'btn--mint' : 'btn--ghost'}`} onClick={() => setSettle(t)}>
+                        {t.settled ? '✓ 已轉' : t.paid > 0 ? `差 ${fmtMoney(t.remaining, t.dueCurrency)}` : '還沒'}
                       </button>
                     </span>
                   </div>
@@ -796,7 +842,8 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
       </button>
       <p className="muted small center-text">上面是純文字；下面的連結讓朋友看自己的份、按一下回報轉帳。</p>
       <ShareLinkSheet p={p} open={linkOpen} onClose={() => setLinkOpen(false)} />
-      <ReminderSheet p={p} person={remind?.person ?? null} amount={remind?.amount} baseAmount={remind?.baseAmount} onClose={() => setRemind(null)} />
+      <ReminderSheet p={p} person={remind?.person ?? null} amount={remind?.amount} baseAmount={remind?.baseAmount} amountText={remind?.amountText} onClose={() => setRemind(null)} />
+      <SettleSheet p={p} t={settle} onClose={() => setSettle(null)} set={set} />
     </main>
   )
 }

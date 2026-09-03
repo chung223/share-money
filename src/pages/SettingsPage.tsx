@@ -7,6 +7,7 @@ import PinPad from '../components/PinPad'
 import type { LockDelay } from '../lib/storage'
 import SyncSection from '../components/SyncSection'
 import PayInfoSection from '../components/PayInfoSection'
+import GroupsSection from '../components/GroupsSection'
 
 export function PersonEditor({ person, onChange, onDelete, title }: { person: Person; onChange: (p: Person) => void; onDelete?: () => void; title: string }) {
   return (
@@ -199,6 +200,8 @@ export default function SettingsPage() {
             </button>
           </div>
         </section>
+
+        <GroupsSection />
 
         <section className="card stack">
           <div className="section-title">📦 備份與還原</div>

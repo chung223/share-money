@@ -1,14 +1,14 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { navigate } from '../router'
 import { computeSplit, fmtMoney } from '../lib/split'
-import { Empty, Mascot } from '../components/ui'
+import { Empty, Mascot, Sheet } from '../components/ui'
 import type { Project } from '../lib/types'
 
 const MODE_LABEL: Record<Project['mode'], string> = { equal: '均攤', items: '各點各的', mains: '主餐+共享' }
 
 function ProjectCard({ p, base }: { p: Project; base: string }) {
-  const r = useMemo(() => computeSplit(p), [p])
+  const r = useMemo(() => computeSplit(p, base), [p, base])
   const others = r.transfers
   const settledCount = others.filter((x) => x.settled).length
   const allSettled = others.length > 0 && settledCount === others.length
@@ -56,22 +56,26 @@ export default function Home() {
   const totalOwed = useMemo(() => {
     let sum = 0
     for (const p of projects) {
-      const r = computeSplit(p)
+      const r = computeSplit(p, base)
       for (const t of r.transfers) {
         if (t.settled) continue
         // money coming back to me (or to whoever paid, when I'm not in the project)
         const toMe = t.to === me || (!p.people.some((x) => x.id === me) && t.to === p.payerId)
         if (!toMe) continue
-        sum += t.baseAmount ?? (p.currency === base ? t.amount : 0)
+        if (t.dueCurrency === base) sum += t.remaining
       }
     }
     return sum
   }, [projects, base, me])
 
-  const create = () => {
-    const p = addProject()
+  const groups = useStore((s) => s.data.groups ?? [])
+  const [pick, setPick] = useState(false)
+  const create = (groupId?: string) => {
+    setPick(false)
+    const p = addProject(groupId)
     navigate(`/p/${p.id}`)
   }
+  const onCreate = () => (groups.length ? setPick(true) : create())
 
   return (
     <div className="page">
@@ -108,7 +112,7 @@ export default function Home() {
       <main className="stack">
         {projects.length === 0 ? (
           <Empty title="還沒有帳本呢" hint="聚餐、外送、計程車，每一餐都是一個小專案。">
-            <button type="button" className="btn btn--primary btn--lg" onClick={create}>
+            <button type="button" className="btn btn--primary btn--lg" onClick={onCreate}>
               ＋ 開一個新帳本
             </button>
           </Empty>
@@ -118,10 +122,27 @@ export default function Home() {
       </main>
 
       {projects.length > 0 && (
-        <button type="button" className="fab" onClick={create} aria-label="新增帳本">
+        <button type="button" className="fab" onClick={onCreate} aria-label="新增帳本">
           ＋
         </button>
       )}
+
+      <Sheet open={pick} onClose={() => setPick(false)} title="開新帳本">
+        <div className="stack-s">
+          {groups.map((g) => (
+            <button key={g.id} type="button" className="btn btn--ghost row gap center" onClick={() => create(g.id)}>
+              <span style={{ fontSize: 22 }}>{g.emoji}</span>
+              <span className="grow left">
+                {g.name}
+                <span className="muted small"> · {g.personIds.length} 人</span>
+              </span>
+            </button>
+          ))}
+          <button type="button" className="btn btn--primary" onClick={() => create()}>
+            📝 空白帳本
+          </button>
+        </div>
+      </Sheet>
     </div>
   )
 }

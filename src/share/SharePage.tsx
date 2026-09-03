@@ -42,7 +42,7 @@ export default function SharePage() {
   }
 
   const project: Project | null = status.kind === 'ok' ? { ...status.snap.project, share: undefined } : null
-  const result = useMemo(() => (project ? computeSplit(project) : null), [project])
+  const result = useMemo(() => (project && status.kind === 'ok' ? computeSplit(project, status.snap.baseCurrency) : null), [project, status])
 
   if (status.kind === 'loading') {
     return (
@@ -158,6 +158,7 @@ export default function SharePage() {
                 <div className="muted small">{meIsPayer ? '你是代墊的人' : '你的份'}</div>
                 <div className="share-amount">{fmtMoney(me.totalRounded, p.currency)}</div>
                 {foreign && me.baseTotal != null && <div className="muted small">≈ {fmtMoney(me.baseTotal, base)}</div>}
+                {me.exactBeforeRounding != null && <div className="muted small">（{fmtMoney(me.exactBeforeRounding, r.overchargeCurrency)} 進位到 {p.rounding}）</div>}
               </div>
             </div>
             {me.lines.length > 0 && (
@@ -194,6 +195,11 @@ export default function SharePage() {
                       {r.multiPayer && <span className="strong"> {fmtMoney(t.amount, p.currency)}</span>}
                       {r.multiPayer && foreign && t.baseAmount != null && <span className="muted"> ≈ {fmtMoney(t.baseAmount, base)}</span>}
                     </div>
+                    {t.paid > 0 && !t.settled && (
+                      <div className="small">
+                        已還 {fmtMoney(t.paid, t.dueCurrency)}，還差 <span className="strong">{fmtMoney(t.remaining, t.dueCurrency)}</span>
+                      </div>
+                    )}
                     {toOwner && pay && (pay.account || pay.linePay) ? (
                       <>
                         {pay.account && (

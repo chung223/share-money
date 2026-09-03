@@ -136,3 +136,33 @@ describe('multi-payer + simplifyDebts', () => {
     expect(simplifyDebts([{ id: 'a', net: 10.5 }, { id: 'b', net: -10.5 }], 2)).toEqual([{ from: 'b', to: 'a', amount: 10.5 }])
   })
 })
+
+describe('rounding + partial repayment', () => {
+  const items = [{ id: 'i1', name: '總額', price: 1000, qty: 1, sharedBy: 'all' as const, kind: 'shared' as const }]
+  it('rounds each non-payer up to 5/10, total unchanged, overcharge reported', () => {
+    const r = computeSplit({ ...base, items, rounding: 10 }, 'TWD')
+    expect(r.people.map((x) => x.totalRounded)).toEqual([334, 340, 340])
+    expect(r.people[1].exactBeforeRounding).toBe(333)
+    expect(r.grandTotalRounded).toBe(1000)
+    expect(r.overcharge).toBe(14)
+    expect(r.transfers.map((t) => t.due)).toEqual([340, 340])
+    expect(computeSplit({ ...base, items, rounding: 5 }, 'TWD').people[1].totalRounded).toBe(335)
+  })
+  it('foreign project rounds the base-currency amount and settles in base currency', () => {
+    const r = computeSplit({ ...base, items, currency: 'JPY', rate: 0.22, rounding: 10 }, 'TWD')
+    expect(r.people[1].totalRounded).toBe(333) // JPY untouched
+    expect(r.people[1].baseTotal).toBe(80) // 73 -> 80
+    expect(r.transfers[0]).toMatchObject({ due: 80, dueCurrency: 'TWD', amount: 333 })
+    expect(r.overchargeCurrency).toBe('TWD')
+  })
+  it('partial repayments reduce remaining and settle when fully paid', () => {
+    const r = computeSplit({ ...base, items, partial: { b_a: 100, c_a: 333 } }, 'TWD')
+    expect(r.transfers[0]).toMatchObject({ paid: 100, remaining: 233, settled: false })
+    expect(r.transfers[1]).toMatchObject({ paid: 333, remaining: 0, settled: true })
+    expect(r.people[2].settled).toBe(true)
+  })
+  it('rounding is ignored for multi-payer', () => {
+    const r = computeSplit({ ...base, items, rounding: 10, payments: [{ personId: 'a', amount: 1000 }] }, 'TWD')
+    expect(r.overcharge).toBe(0)
+  })
+})

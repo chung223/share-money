@@ -9,7 +9,7 @@ import { Sheet } from './ui'
 
 const TONE_KEY = 'banban:reminderTone'
 
-export default function ReminderSheet({ p, person, amount, baseAmount, onClose }: { p: Project; person: PersonResult | null; amount?: number; baseAmount?: number | null; onClose: () => void }) {
+export default function ReminderSheet({ p, person, amount, baseAmount, amountText, onClose }: { p: Project; person: PersonResult | null; amount?: number; baseAmount?: number | null; amountText?: string; onClose: () => void }) {
   const base = useStore((s) => s.data.baseCurrency)
   const payInfo = useStore((s) => s.data.payInfo)
   const showToast = useStore((s) => s.showToast)
@@ -19,8 +19,8 @@ export default function ReminderSheet({ p, person, amount, baseAmount, onClose }
   const hasPay = !!(payInfo?.account || payInfo?.linePay)
 
   useEffect(() => {
-    if (person) setText(reminderText({ project: p, person, amount, baseAmount, baseCurrency: base, payInfo, shareUrl: link, tone }))
-  }, [p, person, amount, baseAmount, base, payInfo, link, tone])
+    if (person) setText(reminderText({ project: p, person, amount, baseAmount, amountText, baseCurrency: base, payInfo, shareUrl: link, tone }))
+  }, [p, person, amount, baseAmount, amountText, base, payInfo, link, tone])
 
   const pick = (t: Tone) => {
     setTone(t)

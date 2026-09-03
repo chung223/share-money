@@ -1592,3 +1592,11 @@ button.avatar:active {
   justify-content: flex-end;
   gap: 8px;
 }
+.c-text-pink {
+  color: var(--c-pink-ink);
+  font-weight: 700;
+}
+.friend.is-on span:last-child {
+  color: var(--c-pink-ink);
+  font-weight: 900;
+}

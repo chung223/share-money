@@ -17,6 +17,8 @@ export interface PersonResult {
   total: number // project currency, unrounded
   totalRounded: number // project currency, rounded to currency decimals, drift-corrected
   baseTotal: number | null // base currency, rounded, drift-corrected (null when no rate)
+  /** Before "round up to 5/10" was applied (same currency as the rounded field). null = no rounding happened. */
+  exactBeforeRounding: number | null
   /** Paid up front (project currency, rounded). Single-payer: grand total for the payer, 0 for others. */
   paid: number
   /** paid - totalRounded: positive = others owe this person. */
@@ -32,6 +34,12 @@ export interface Transfer {
   to: Id
   amount: number // project currency
   baseAmount: number | null
+  /** What actually has to be handed over: base currency when the project is foreign and has a rate, else project currency. */
+  due: number
+  dueCurrency: string
+  /** Partial repayments so far (due currency). */
+  paid: number
+  remaining: number
   settled: boolean
 }
 
@@ -48,6 +56,14 @@ export interface SplitResult {
   multiPayer: boolean
   /** Multi-payer only: payments sum minus grand total (0 when it adds up). */
   paymentsDiff: number
+  /** Extra collected because of round-up (in overchargeCurrency). 0 when rounding is off. */
+  overcharge: number
+  overchargeCurrency: string
+}
+
+export function roundUpTo(n: number, step: number) {
+  if (!step) return n
+  return Math.ceil(n / step - 1e-9) * step
 }
 
 export function transferKey(from: Id, to: Id) {
@@ -140,7 +156,7 @@ export function resolveSharers(item: Item, project: Project): Id[] {
   return item.sharedBy.filter((id) => ids.includes(id))
 }
 
-export function computeSplit(project: Project): SplitResult {
+export function computeSplit(project: Project, baseCurrency?: string): SplitResult {
   const people = project.people
   const n = people.length
   const decimals = currencyMeta(project.currency).decimals
@@ -155,6 +171,7 @@ export function computeSplit(project: Project): SplitResult {
       total: 0,
       totalRounded: 0,
       baseTotal: null,
+      exactBeforeRounding: null,
       paid: 0,
       net: 0,
       isPayer: p.id === project.payerId,
@@ -216,8 +233,36 @@ export function computeSplit(project: Project): SplitResult {
     baseGrandTotal = roundTo(grandTotal * project.rate, baseDecimals)
   }
 
-  // ---- who paid, who owes whom ----
+  // ---- round up to 5 / 10 (single payer only; the payer's own share is never rounded) ----
   const multiPayer = hasMultiPayer(project)
+  const rate = project.rate != null && project.rate > 0 ? project.rate : null
+  const useBase = rate != null && baseCurrency != null && project.currency !== baseCurrency
+  let overcharge = 0
+  const overchargeCurrency = useBase ? baseCurrency! : project.currency
+  const step = project.rounding ?? 0
+  if (step > 0 && !multiPayer) {
+    for (const r of results) {
+      if (r.isPayer) continue
+      if (useBase) {
+        if (r.baseTotal == null) continue
+        const up = roundUpTo(r.baseTotal, step)
+        if (up !== r.baseTotal) {
+          r.exactBeforeRounding = r.baseTotal
+          overcharge += up - r.baseTotal
+          r.baseTotal = up
+        }
+      } else if (decimals === 0) {
+        const up = roundUpTo(r.totalRounded, step)
+        if (up !== r.totalRounded) {
+          r.exactBeforeRounding = r.totalRounded
+          overcharge += up - r.totalRounded
+          r.totalRounded = up
+        }
+      }
+    }
+  }
+
+  // ---- who paid, who owes whom ----
   let paymentsDiff = 0
   if (multiPayer) {
     for (const pay of project.payments!) {
@@ -234,24 +279,33 @@ export function computeSplit(project: Project): SplitResult {
   let raw: { from: Id; to: Id; amount: number }[]
   if (multiPayer) raw = simplifyDebts(results.map((r) => ({ id: r.person.id, net: r.net })), decimals)
   else raw = results.filter((r) => !r.isPayer && r.totalRounded > 0).map((r) => ({ from: r.person.id, to: project.payerId, amount: r.totalRounded }))
-  const rate = project.rate != null && project.rate > 0 ? project.rate : null
-  const transfers: Transfer[] = raw.map((t) => ({
-    key: transferKey(t.from, t.to),
-    from: t.from,
-    to: t.to,
-    amount: t.amount,
-    baseAmount: rate ? roundTo(t.amount * rate, baseDecimals) : null,
-    settled: isTransferSettled(project.settled, t.from, t.to, project.payerId),
-  }))
-  // keep per-person base amounts consistent with the drift-corrected totals in single-payer mode
-  if (!multiPayer) for (const t of transfers) t.baseAmount = perPerson.get(t.from)!.baseTotal
+  const transfers: Transfer[] = raw.map((t) => {
+    const baseAmount = !multiPayer ? perPerson.get(t.from)!.baseTotal : rate ? roundTo(t.amount * rate, baseDecimals) : null
+    const key = transferKey(t.from, t.to)
+    const dueInBase = useBase && baseAmount != null
+    const due = dueInBase ? baseAmount! : t.amount
+    const paid = Math.max(0, project.partial?.[key] ?? 0)
+    const remaining = Math.max(0, roundTo(due - paid, dueInBase ? baseDecimals : decimals))
+    return {
+      key,
+      from: t.from,
+      to: t.to,
+      amount: t.amount,
+      baseAmount,
+      due,
+      dueCurrency: dueInBase ? baseCurrency! : project.currency,
+      paid,
+      remaining,
+      settled: isTransferSettled(project.settled, t.from, t.to, project.payerId) || (paid > 0 && remaining <= 0),
+    }
+  })
   for (const r of results) {
     const mine = transfers.filter((t) => t.from === r.person.id)
     r.settled = mine.every((t) => t.settled)
     if (!multiPayer && r.isPayer) r.settled = true
   }
 
-  return { people: results, itemsTotal, extrasTotal, grandTotal, grandTotalRounded, baseGrandTotal, unassigned, transfers, multiPayer, paymentsDiff }
+  return { people: results, itemsTotal, extrasTotal, grandTotal, grandTotalRounded, baseGrandTotal, unassigned, transfers, multiPayer, paymentsDiff, overcharge, overchargeCurrency }
 }
 
 export function extraAmount(extra: Extra, itemsTotal: number) {
@@ -265,7 +319,7 @@ export function summaryText(project: Project, result: SplitResult, baseCurrency:
   const fmt = (n: number) => fmtMoney(n, project.currency)
   const lines: string[] = []
   lines.push(`${project.emoji} ${project.name}（${project.date}）`)
-  lines.push(`總計 ${fmt(result.grandTotalRounded)}${result.baseGrandTotal != null ? ` ≈ ${fmtMoney(result.baseGrandTotal, baseCurrency)}` : ''}`)
+  lines.push(`總計 ${fmt(result.grandTotalRounded)}${result.baseGrandTotal != null ? ` ≈ ${fmtMoney(result.baseGrandTotal, baseCurrency)}` : ''}${result.overcharge > 0 ? `（每人進位到 ${project.rounding}，多收 ${fmtMoney(result.overcharge, result.overchargeCurrency)}）` : ''}`)
   const payer = project.people.find((p) => p.id === project.payerId)
   if (result.multiPayer) {
     const payers = result.people.filter((r) => r.paid > 0).map((r) => `${r.person.emoji}${r.person.name} ${fmt(r.paid)}`)
@@ -286,7 +340,9 @@ export function summaryText(project: Project, result: SplitResult, baseCurrency:
     }
   } else {
     for (const r of result.people) {
-      const tag = r.isPayer ? '（代墊）' : r.settled ? ' ✅' : ''
+      const t = result.transfers.find((x) => x.from === r.person.id)
+      const partial = t && !t.settled && t.paid > 0 ? `（已還 ${fmtMoney(t.paid, t.dueCurrency)}，還差 ${fmtMoney(t.remaining, t.dueCurrency)}）` : ''
+      const tag = r.isPayer ? '（代墊）' : r.settled ? ' ✅' : partial
       const base = r.baseTotal != null ? ` ≈ ${fmtMoney(r.baseTotal, baseCurrency)}` : ''
       lines.push(`${r.person.emoji} ${r.person.name}：${fmt(r.totalRounded)}${base}${tag}`)
     }

@@ -65,6 +65,10 @@ export interface Project {
    * Legacy single-payer data keyed by personId is still understood.
    */
   settled: Record<string, boolean>
+  /** Partial repayments per transfer key, in the transfer's due currency (see split.ts Transfer). */
+  partial?: Record<string, number>
+  /** Round each person's amount up to a multiple of 5 / 10 (single-payer only). 0/undefined = off. */
+  rounding?: 0 | 5 | 10
   note?: string
   /** Friend-facing share link (see lib/share.ts). Snapshot is re-uploaded on sync when stale. */
   share?: ProjectShare
@@ -97,10 +101,20 @@ export interface SyncConfig {
   enabledAt: number
 }
 
+/** A saved combination of friends + default split mode, for one-tap new projects. */
+export interface Group {
+  id: Id
+  name: string
+  emoji: string
+  personIds: Id[]
+  mode: SplitMode
+}
+
 export interface AppData {
   version: 1
   me: Person
   friends: Person[]
+  groups?: Group[]
   projects: Project[]
   baseCurrency: string
   payInfo?: PayInfo
