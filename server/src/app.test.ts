@@ -22,6 +22,7 @@ function setup(t0 = T0) {
   const shareHtml = join(tmpdir(), `banban-share-${process.pid}.html`)
   writeFileSync(shareHtml, '<!doctype html><html><head><meta charset="utf-8"><title>x</title></head><body><div id="root"></div></body></html>')
   const aiCalls: unknown[] = []
+  const byokCalls: { url: string; auth?: string }[] = []
   const { app, purgeExpired, purgeInactive } = createApp({
     db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30, push, publicOrigin: 'https://example.test', shareHtml,
     renderOgImage: async (i) => Buffer.from('PNG:' + i.title),
@@ -29,10 +30,14 @@ function setup(t0 = T0) {
     aiDailyQuota: 2,
     aiGlobalDaily: 3,
     aiInviteCode: 'friends-only',
+    byokFetch: (async (url: string | URL | Request, init?: RequestInit) => {
+      byokCalls.push({ url: String(url), auth: (init?.headers as Record<string, string>)?.authorization ?? (init?.headers as Record<string, string>)?.['x-api-key'] })
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"name":"byok","qty":1,"price":9}]}' } }] }), { status: 200 })
+    }) as unknown as typeof fetch,
   })
   const call = (path: string, init: RequestInit = {}, token?: string, ip = '1.2.3.4') =>
     app.request(path, { ...init, headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
-  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead, aiCalls }
+  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead, aiCalls, byokCalls }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function body(r: Response | Promise<Response>): Promise<any> {
@@ -250,5 +255,22 @@ describe('ai parse', () => {
     expect(normalise('<think>想一下</think>```json\n{"items":[{"name":"a","qty":1,"price":5}]}\n```').items).toHaveLength(1)
     // trailing prose / second object after the JSON must not break parsing
     expect(normalise('{"items":[{"name":"a \\"b\\"","qty":1,"price":5}],"total":5} 以上是結果 {"x":1}').total).toBe(5)
+  })
+})
+
+describe('byok proxy', () => {
+  it('forwards to a public https provider with the caller key, rejects private/http urls', async () => {
+    const { call, byokCalls } = setup()
+    const provider = { format: 'openai', baseUrl: 'https://api.example.com/v1', model: 'm', apiKey: 'sk-user' }
+    expect((await call('/api/parse/byok', post({ provider, text: 'x' }))).status).toBe(401)
+    const r = await body(call('/api/parse/byok', post({ provider, text: 'x' }), A))
+    expect(r.items[0].name).toBe('byok')
+    expect(byokCalls[0]).toEqual({ url: 'https://api.example.com/v1/chat/completions', auth: 'Bearer sk-user' })
+    expect((await call('/api/parse/byok', post({ provider: { ...provider, baseUrl: 'http://api.example.com/v1' }, text: 'x' }), A)).status).toBe(400)
+    expect((await call('/api/parse/byok', post({ provider: { ...provider, baseUrl: 'https://127.0.0.1:3456/v1' }, text: 'x' }), A)).status).toBe(400)
+    expect((await call('/api/parse/byok', post({ provider: { ...provider, apiKey: '' }, text: 'x' }), A)).status).toBe(400)
+    // anthropic format goes to /messages with x-api-key
+    await call('/api/parse/byok', post({ provider: { ...provider, format: 'anthropic', baseUrl: 'https://api.anthropic.com/v1' }, text: 'x' }), A)
+    expect(byokCalls[1]).toEqual({ url: 'https://api.anthropic.com/v1/messages', auth: 'sk-user' })
   })
 })

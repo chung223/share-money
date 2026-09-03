@@ -130,6 +130,8 @@ export interface AppData {
   projects: Project[]
   baseCurrency: string
   payInfo?: PayInfo
+  /** 使用者自帶的 AI（BYOK）。金鑰存在這裡 = 有 PIN 就跟著加密、同步時端對端加密。 */
+  aiProvider?: { format: 'openai' | 'anthropic'; baseUrl: string; model: string; apiKey: string; preset?: string }
   sync?: SyncConfig
   /** Tombstones: projectId -> deletion time, so a delete wins over a stale copy on another device. */
   deleted?: Record<Id, number>

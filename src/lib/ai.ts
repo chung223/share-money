@@ -1,6 +1,7 @@
 /** AI 收據辨識（伺服器代呼叫 MiniMax）。需要開同步（用帳號算額度），且帳號要有權限（邀請碼或管理者開通）。 */
 import { useStore } from '../store'
 import { api, apiBase, deriveSyncKeys, SyncError } from './sync'
+import { callProvider, type AiProviderConfig, type ParseInput, type ParseOutput } from './receiptAi'
 
 export interface AiParsed {
   items: { name: string; qty: number; price: number }[]
@@ -49,10 +50,36 @@ export async function aiStatus(force = false): Promise<AiStatus | null> {
   }
 }
 
-/** 匯入面板用：這台現在能不能用 AI。 */
+export function ownProvider(): AiProviderConfig | null {
+  const p = useStore.getState().data.aiProvider
+  return p && p.apiKey && p.baseUrl && p.model ? { format: p.format, baseUrl: p.baseUrl, model: p.model, apiKey: p.apiKey } : null
+}
+
+/** 匯入面板用：這台現在能不能用 AI（自己的金鑰優先，其次站方 AI）。 */
 export async function aiAvailable(): Promise<boolean> {
+  if (ownProvider()) return true
   const s = await aiStatus()
   return !!s?.allowed && s.remaining > 0
+}
+
+/** 用自己的金鑰：瀏覽器先直打，被 CORS／網路擋住才經伺服器代轉（金鑰不落地）。 */
+export async function parseWithOwnProvider(cfg: AiProviderConfig, input: ParseInput): Promise<ParseOutput & { via: 'browser' | 'proxy' }> {
+  try {
+    const out = await callProvider(cfg, input, { browser: true })
+    return { ...out, via: 'browser' }
+  } catch (e) {
+    // TypeError = fetch 根本沒送出去（CORS / 網路）；其他錯（401、模型錯）直接丟出
+    if (!(e instanceof TypeError)) throw e
+  }
+  const s = useStore.getState()
+  if (!s.data.sync) await s.enableSync()
+  const a = (await authed())!
+  const r = await api.raw(a.base, '/api/parse/byok', { method: 'POST', token: a.token, json: { provider: cfg, ...input } })
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}))
+    throw new Error(j.message || j.reason || `代轉失敗（HTTP ${r.status}）`)
+  }
+  return { ...(await r.json()), via: 'proxy' }
 }
 
 export async function redeemAiCode(code: string): Promise<AiStatus> {
@@ -69,6 +96,11 @@ export async function redeemAiCode(code: string): Promise<AiStatus> {
 }
 
 export async function aiParse(input: { text?: string; image?: { mediaType: string; base64: string } }): Promise<AiParsed> {
+  const own = ownProvider()
+  if (own) {
+    const out = await parseWithOwnProvider(own, input)
+    return { ...out, remaining: Number.POSITIVE_INFINITY }
+  }
   const s = useStore.getState()
   if (!s.data.sync) await s.enableSync()
   const a = (await authed())!

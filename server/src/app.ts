@@ -5,6 +5,7 @@ import type { Db } from './db.ts'
 import { readFileSync, statSync } from 'node:fs'
 import { renderOg } from './og.ts'
 import type { AiParser } from './ai.ts'
+import { callProvider, isPublicHttpsUrl, type AiFormat } from '../../src/lib/receiptAi.ts'
 
 export interface AppOptions {
   db: Db
@@ -30,6 +31,8 @@ export interface AppOptions {
   aiInviteCode?: string
   /** true = everyone may use AI without a code (not recommended). */
   aiOpen?: boolean
+  /** Test hook for the BYOK proxy. */
+  byokFetch?: typeof fetch
   /** Test hook: replace the PNG renderer. */
   renderOgImage?: (i: { title: string; subtitle: string; mood?: 'happy' | 'wow' | 'sleepy' }) => Promise<Buffer>
 }
@@ -90,7 +93,7 @@ function makeLimiter(limit: number, windowMs: number, now: () => number) {
 
 type Vars = { accountId: string }
 
-export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40, aiGlobalDaily = 300, aiInviteCode, aiOpen = false }: AppOptions) {
+export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40, aiGlobalDaily = 300, aiInviteCode, aiOpen = false, byokFetch }: AppOptions) {
   const app = new Hono<{ Variables: Vars }>()
   const q = {
     accountByHash: db.raw.prepare('SELECT id FROM accounts WHERE token_hash = ?'),
@@ -411,6 +414,33 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
       return c.json({ error: 'ai_failed' }, 502)
     }
   })
+  // BYOK 代轉：瀏覽器被 CORS 擋住時才會走這裡。金鑰只用於本次請求、不寫入任何地方；只准 https 公網位址。
+  const byokLimiter = makeLimiter(60, 3_600_000, now)
+  app.post('/api/parse/byok', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    if (!byokLimiter(clientIp(c.req.raw.headers))) return c.json({ error: 'rate_limited' }, 429)
+    const body = await c.req.json().catch(() => null)
+    const p = body?.provider
+    const format: AiFormat = p?.format === 'anthropic' ? 'anthropic' : 'openai'
+    if (!p || typeof p.baseUrl !== 'string' || typeof p.model !== 'string' || typeof p.apiKey !== 'string' || !p.apiKey || p.apiKey.length > 500) return c.json({ error: 'bad_request' }, 400)
+    if (!isPublicHttpsUrl(p.baseUrl)) return c.json({ error: 'bad_url', reason: 'baseUrl 必須是 https 的公開網址' }, 400)
+    const text = typeof body?.text === 'string' ? body.text.slice(0, 8000) : undefined
+    const img = body?.image
+    const image =
+      img && typeof img.base64 === 'string' && img.base64.length < 6_000_000 && /^image\/(jpeg|png|webp|gif)$/.test(img.mediaType ?? '') ? { mediaType: img.mediaType as string, base64: img.base64 as string } : undefined
+    if (!text && !image) return c.json({ error: 'bad_request' }, 400)
+    try {
+      const out = await callProvider({ format, baseUrl: p.baseUrl, model: String(p.model).slice(0, 100), apiKey: p.apiKey }, { text, image }, { fetchFn: byokFetch })
+      return c.json(out)
+    } catch (e) {
+      // 不要把金鑰寫進 log：只記錄錯誤訊息前 120 字
+      const msg = (e as Error).message ?? 'failed'
+      console.error('byok parse failed:', msg.slice(0, 120))
+      return c.json({ error: 'provider_failed', message: msg.slice(0, 200) }, 502)
+    }
+  })
+
   // admin: who may use AI and how much they used
   const adminOk = (c: import('hono').Context<{ Variables: Vars }>) => {
     const m = /^Bearer\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')

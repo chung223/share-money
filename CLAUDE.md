@@ -11,6 +11,7 @@
 - 機密在 `/www/banban-data/.env`（`ADMIN_TOKEN`），ecosystem 讀進環境變數。統計：`curl -H "Authorization: Bearer $ADMIN_TOKEN" https://spilt.chung.men/api/admin/stats`。
 - 多用戶：任何人開同步就自動建帳號（每 IP 每小時最多 10 個新帳號），180 天沒同步的帳號連資料一起刪（`INACTIVE_DAYS`）。
 - 分享頁 `/s/<id>` 由 nginx 反代到 Node（`app.get('/s/:id')` 讀 `dist/s/index.html` 注入 OG）；預覽圖 `server/src/og.ts`（sharp + SVG），中文字型 `/www/banban-data/fonts/NotoSansTC-Bold.otf`，ecosystem 設 `FONTCONFIG_FILE`。
+- BYOK：使用者自帶金鑰存 `AppData.aiProvider`（E2E 加密同步）；`src/lib/receiptAi.ts` 是前後端共用的 provider 呼叫（openai／anthropic 兩種格式）；瀏覽器直打失敗（TypeError=CORS）才走 `POST /api/parse/byok`（需同步帳號、每 IP 60/時、只准 https 公網、金鑰不落地不記 log）。
 - AI 辨識：`MINIMAX_*` 在 `/www/banban-data/.env`（與 thin/tarot 同一把），`server/src/ai.ts`。**存取控管**：帳號要先用 `AI_INVITE_CODE`（.env）在設定頁開通，或站長用 admin API 開；每帳號每日 `AI_DAILY_QUOTA`（40）、全站每日 `AI_GLOBAL_DAILY`（300），用量存 `ai_usage` 表。`AI_OPEN=1` 才會對所有人開放。
   - 看誰在用：`curl -H "Authorization: Bearer $ADMIN_TOKEN" https://spilt.chung.men/api/admin/ai`
   - 開通／停用：`curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"accountId":"<id>","allow":true,"note":"朋友"}' https://spilt.chung.men/api/admin/ai`
