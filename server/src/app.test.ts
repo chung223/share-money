@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp } from './app.ts'
 import { normalise } from './ai.ts'
+import { createLineClient } from './line.ts'
+import { createHmac } from 'node:crypto'
 
 const T0 = 1_700_000_000_000
 function setup(t0 = T0) {
@@ -23,6 +25,18 @@ function setup(t0 = T0) {
   writeFileSync(shareHtml, '<!doctype html><html><head><meta charset="utf-8"><title>x</title></head><body><div id="root"></div></body></html>')
   const aiCalls: unknown[] = []
   const byokCalls: { url: string; auth?: string }[] = []
+  const lineOut: { url: string; body: unknown }[] = []
+  const line = createLineClient({
+    channelSecret: 'secret',
+    accessToken: 'tok',
+    fetchFn: (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url)
+      lineOut.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : null })
+      if (u.includes('/profile/')) return new Response(JSON.stringify({ displayName: '小賴' }), { status: 200 })
+      if (u.includes('/content')) return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/jpeg' } })
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch,
+  })
   const { app, purgeExpired, purgeInactive } = createApp({
     db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30, push, publicOrigin: 'https://example.test', shareHtml,
     renderOgImage: async (i) => Buffer.from('PNG:' + i.title),
@@ -30,6 +44,7 @@ function setup(t0 = T0) {
     aiDailyQuota: 2,
     aiGlobalDaily: 3,
     aiInviteCode: 'friends-only',
+    line,
     byokFetch: (async (url: string | URL | Request, init?: RequestInit) => {
       byokCalls.push({ url: String(url), auth: (init?.headers as Record<string, string>)?.authorization ?? (init?.headers as Record<string, string>)?.['x-api-key'] })
       return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"name":"byok","qty":1,"price":9}]}' } }] }), { status: 200 })
@@ -37,7 +52,7 @@ function setup(t0 = T0) {
   })
   const call = (path: string, init: RequestInit = {}, token?: string, ip = '1.2.3.4') =>
     app.request(path, { ...init, headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
-  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead, aiCalls, byokCalls }
+  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead, aiCalls, byokCalls, lineOut }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function body(r: Response | Promise<Response>): Promise<any> {
@@ -308,5 +323,56 @@ describe('shared trips', () => {
     expect((await call(`/api/trip/${id}`, { method: 'DELETE' }, 'x'.repeat(43))).status).toBe(404)
     expect((await call(`/api/trip/${id}`, { method: 'DELETE' }, T)).status).toBe(200)
     expect((await call(`/api/trip/${id}`, {}, T)).status).toBe(404)
+  })
+})
+
+describe('LINE bot', () => {
+  const sig = (body: string) => createHmac('sha256', 'secret').update(body).digest('base64')
+  const hook = (call: ReturnType<typeof setup>['call'], events: unknown[]) => {
+    const body = JSON.stringify({ destination: 'x', events })
+    return call('/api/line/webhook', { method: 'POST', body, headers: { 'x-line-signature': sig(body) } })
+  }
+  it('rejects bad signatures', async () => {
+    const { call } = setup()
+    expect((await call('/api/line/webhook', { method: 'POST', body: '{"events":[]}', headers: { 'x-line-signature': 'nope' } })).status).toBe(401)
+    expect((await hook(call, [])).status).toBe(200)
+  })
+  it('link code flow, text/image drafts show up in sync, ack clears them, push on paid', async () => {
+    const { call, lineOut, tick } = setup()
+    expect((await body(call('/api/line/status', {}, A)))).toMatchObject({ available: true, linked: false, pending: 0 })
+    const { code } = await body(call('/api/line/link-code', post({}), A))
+    expect(code).toMatch(/^[A-Z2-9]{6}$/)
+    // unlinked user gets help
+    await hook(call, [{ type: 'message', replyToken: 'r1', source: { type: 'user', userId: 'U1' }, message: { type: 'text', id: '1', text: '嗨' } }])
+    await new Promise((r) => setTimeout(r, 10))
+    expect(JSON.stringify(lineOut.at(-1)?.body)).toContain('連結碼')
+    // wrong then right code
+    await hook(call, [{ type: 'message', replyToken: 'r2', source: { type: 'user', userId: 'U1' }, message: { type: 'text', id: '2', text: '連結 ZZZZZZ' } }])
+    await hook(call, [{ type: 'message', replyToken: 'r3', source: { type: 'user', userId: 'U1' }, message: { type: 'text', id: '3', text: `連結 ${code.toLowerCase()}` } }])
+    await new Promise((r) => setTimeout(r, 20))
+    expect((await body(call('/api/line/status', {}, A)))).toMatchObject({ linked: true, displayName: '小賴' })
+    // text draft + image draft (site AI allowed -> receipt)
+    await call('/api/ai/redeem', post({ code: 'friends-only' }), A)
+    await hook(call, [
+      { type: 'message', replyToken: 'r4', source: { type: 'user', userId: 'U1' }, message: { type: 'text', id: '4', text: '昨天拉麵 900 我付的' } },
+      { type: 'message', replyToken: 'r5', source: { type: 'user', userId: 'U1' }, message: { type: 'image', id: '5' } },
+    ])
+    await new Promise((r) => setTimeout(r, 30))
+    const s = await body(call('/api/sync', {}, A))
+    expect(s.lineDrafts.map((d: { kind: string }) => d.kind)).toEqual(['text', 'receipt'])
+    expect(s.lineDrafts[0].payload.text).toBe('昨天拉麵 900 我付的')
+    expect(s.lineDrafts[1].payload.receipt.items[0].name).toBe('牛肉麵')
+    await call('/api/line/ack', post({ ids: s.lineDrafts.map((d: { id: number }) => d.id) }), A)
+    expect((await body(call('/api/sync', {}, A))).lineDrafts).toEqual([])
+    // paid event pushes to LINE when linked
+    const { id } = await body(call('/api/share', post({ projectId: 'p1', cipher: 'enc', expiresAt: T0 + 86_400_000 }), A))
+    await call(`/api/share/${id}/paid`, post({ personId: 'x1', label: '小明' }))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(lineOut.some((o) => o.url.endsWith('/message/push') && JSON.stringify(o.body).includes('小明'))).toBe(true)
+    // disable push, unlink
+    await call('/api/line/push', post({ enabled: false }), A)
+    await call('/api/line/link', { method: 'DELETE' }, A)
+    expect((await body(call('/api/line/status', {}, A))).linked).toBe(false)
+    tick(1)
   })
 })

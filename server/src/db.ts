@@ -63,6 +63,28 @@ CREATE TABLE IF NOT EXISTS trips (
   updated_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS line_links (
+  line_user_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  display_name TEXT,
+  push_enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS line_links_account ON line_links(account_id);
+CREATE TABLE IF NOT EXISTS line_link_codes (
+  code TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS line_drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  consumed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS line_drafts_account ON line_drafts(account_id, consumed);
 CREATE TABLE IF NOT EXISTS ai_usage (
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   day TEXT NOT NULL,

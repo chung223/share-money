@@ -8,6 +8,7 @@ import type { Group } from '../lib/types'
 import { CATEGORIES, categoryOf, modeLabel, type Category } from '../lib/category'
 import BalancesSheet from '../components/BalancesSheet'
 import QuickCreateSheet from '../components/QuickCreateSheet'
+import LineInboxSheet from '../components/LineInboxSheet'
 import { useAiAvailable } from '../components/useAiAvailable'
 import { tripSettlement } from '../lib/balances'
 import type { Trip } from '../lib/types'
@@ -91,6 +92,8 @@ export default function Home() {
   const [filter, setFilter] = useState<Category | 'all'>('all')
   const [balances, setBalances] = useState(false)
   const [quick, setQuick] = useState(false)
+  const lineDrafts = useStore((s) => s.lineDrafts)
+  const [inbox, setInbox] = useState(false)
   const ai = useAiAvailable()
   const create = (groupId?: string, category?: Category) => {
     setPick(false)
@@ -134,6 +137,15 @@ export default function Home() {
         </button>
       )}
 
+      {lineDrafts.length > 0 && (
+        <button type="button" className="card card--mint hero-stat" onClick={() => setInbox(true)}>
+          <div>
+            <div className="hero-stat__label">💚 LINE 傳來的草稿</div>
+            <div className="strong">{lineDrafts.length} 筆等你建帳本</div>
+          </div>
+          <div className="hero-stat__emoji">📥</div>
+        </button>
+      )}
       <main className="stack">
         {projects.length === 0 ? (
           <Empty title="還沒有帳本呢" hint="聚餐、計程車、團購、旅行，每次代墊都是一個小帳本。">
@@ -195,6 +207,7 @@ export default function Home() {
         </div>
       </Sheet>
       <QuickCreateSheet open={quick} onClose={() => setQuick(false)} />
+      <LineInboxSheet open={inbox} onClose={() => setInbox(false)} />
       <Sheet open={pick} onClose={() => setPick(false)} title="開新帳本">
         <div className="stack">
           {ai && (

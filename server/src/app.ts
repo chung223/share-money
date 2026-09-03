@@ -5,6 +5,7 @@ import type { Db } from './db.ts'
 import { readFileSync, statSync } from 'node:fs'
 import { renderOg } from './og.ts'
 import type { AiParser } from './ai.ts'
+import { LINE_HELP, type LineClient } from './line.ts'
 import { callChat, callProvider, isPublicHttpsUrl, type AiFormat } from '../../src/lib/receiptAi.ts'
 
 export interface AppOptions {
@@ -33,6 +34,8 @@ export interface AppOptions {
   aiOpen?: boolean
   /** Test hook for the BYOK proxy. */
   byokFetch?: typeof fetch
+  /** LINE Messaging API client; `enabled: false` = webhook returns 404. */
+  line?: LineClient
   /** Test hook: replace the PNG renderer. */
   renderOgImage?: (i: { title: string; subtitle: string; mood?: 'happy' | 'wow' | 'sleepy' }) => Promise<Buffer>
 }
@@ -94,7 +97,7 @@ function makeLimiter(limit: number, windowMs: number, now: () => number) {
 
 type Vars = { accountId: string }
 
-export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40, aiGlobalDaily = 300, aiInviteCode, aiOpen = false, byokFetch }: AppOptions) {
+export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40, aiGlobalDaily = 300, aiInviteCode, aiOpen = false, byokFetch, line }: AppOptions) {
   const app = new Hono<{ Variables: Vars }>()
   const q = {
     accountByHash: db.raw.prepare('SELECT id FROM accounts WHERE token_hash = ?'),
@@ -135,6 +138,19 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     tripDelete: db.raw.prepare('DELETE FROM trips WHERE id = ?'),
     tripPurge: db.raw.prepare('DELETE FROM trips WHERE last_seen_at < ?'),
     tripCount: db.raw.prepare('SELECT COUNT(*) AS n FROM trips'),
+    lineByUser: db.raw.prepare('SELECT account_id, display_name, push_enabled FROM line_links WHERE line_user_id = ?'),
+    lineByAccount: db.raw.prepare('SELECT line_user_id, display_name, push_enabled, created_at FROM line_links WHERE account_id = ?'),
+    lineLink: db.raw.prepare('INSERT INTO line_links (line_user_id, account_id, display_name, push_enabled, created_at) VALUES (?, ?, ?, 1, ?) ON CONFLICT(line_user_id) DO UPDATE SET account_id = excluded.account_id, display_name = excluded.display_name, created_at = excluded.created_at'),
+    lineUnlink: db.raw.prepare('DELETE FROM line_links WHERE account_id = ?'),
+    lineSetPush: db.raw.prepare('UPDATE line_links SET push_enabled = ? WHERE account_id = ?'),
+    lineCodeInsert: db.raw.prepare('INSERT INTO line_link_codes (code, account_id, expires_at) VALUES (?, ?, ?)'),
+    lineCodeGet: db.raw.prepare('SELECT account_id, expires_at FROM line_link_codes WHERE code = ?'),
+    lineCodeDelete: db.raw.prepare('DELETE FROM line_link_codes WHERE code = ? OR expires_at < ?'),
+    lineDraftInsert: db.raw.prepare('INSERT INTO line_drafts (account_id, kind, payload, created_at) VALUES (?, ?, ?, ?)'),
+    lineDraftsPending: db.raw.prepare('SELECT id, kind, payload, created_at FROM line_drafts WHERE account_id = ? AND consumed = 0 ORDER BY id LIMIT 50'),
+    lineDraftCount: db.raw.prepare('SELECT COUNT(*) AS n FROM line_drafts WHERE account_id = ? AND consumed = 0'),
+    lineDraftAck: db.raw.prepare('UPDATE line_drafts SET consumed = 1 WHERE id = ? AND account_id = ?'),
+    lineDraftPurge: db.raw.prepare('DELETE FROM line_drafts WHERE consumed = 1 OR created_at < ?'),
     aiFlag: db.raw.prepare('SELECT ai_allowed, note FROM account_flags WHERE account_id = ?'),
     setAiFlag: db.raw.prepare('INSERT INTO account_flags (account_id, ai_allowed, note, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET ai_allowed = excluded.ai_allowed, note = COALESCE(excluded.note, account_flags.note), updated_at = excluded.updated_at'),
     aiUsed: db.raw.prepare('SELECT n FROM ai_usage WHERE account_id = ? AND day = ?'),
@@ -160,7 +176,8 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
         (SELECT COUNT(*) FROM share_events) AS events,
         (SELECT COUNT(*) FROM share_events WHERE acked = 0) AS events_pending,
         (SELECT COUNT(*) FROM push_subs) AS push_subs,
-        (SELECT COUNT(*) FROM trips) AS trips`,
+        (SELECT COUNT(*) FROM trips) AS trips,
+        (SELECT COUNT(*) FROM line_links) AS line_links`,
     ),
   }
   const publicLimiter = makeLimiter(60, 60_000, now)
@@ -219,6 +236,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
       updatedAt: blob?.updated_at ?? null,
       events: events.map((e) => ({ id: e.id, shareId: e.share_id, projectId: e.project_id, personId: e.person_id, kind: e.kind, createdAt: e.created_at, note: e.note, label: e.label })),
       push: push ? { enabled: (q.subsByAccount.all(accountId) as unknown[]).length > 0 } : null,
+      lineDrafts: line?.enabled ? (q.lineDraftsPending.all(accountId) as { id: number; kind: string; payload: string; created_at: number }[]).map((d) => ({ id: d.id, kind: d.kind, payload: JSON.parse(d.payload), createdAt: d.created_at })) : [],
       shares: shares.map((s) => ({ id: s.id, projectId: s.project_id, expiresAt: s.expires_at, updatedAt: s.updated_at })),
     })
   })
@@ -564,6 +582,10 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
 
   // --- web push ---
   const notifyOwner = (accountId: string, body: string) => {
+    if (line?.enabled) {
+      const l = q.lineByAccount.get(accountId) as { line_user_id: string; push_enabled: number } | undefined
+      if (l && l.push_enabled) line.push(l.line_user_id, [{ type: 'text', text: `💸 ${body}\n打開 App 看看 👉 https://spilt.chung.men` }]).catch(() => {})
+    }
     if (!push) return
     const subs = q.subsByAccount.all(accountId) as unknown as PushSubscriptionRow[]
     const payload = JSON.stringify({ title: '반반 BanBan', body, url: '/', tag: 'banban-paid' })
@@ -576,6 +598,119 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
         .catch((e) => console.error('push failed', e))
     }
   }
+  // --- LINE 機器人：連結碼、webhook、收件匣 ---
+  const lineCodeLimiter = makeLimiter(20, 3_600_000, now)
+  app.get('/api/line/status', (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const l = q.lineByAccount.get(accountId) as { line_user_id: string; display_name: string | null; push_enabled: number; created_at: number } | undefined
+    return c.json({ available: !!line?.enabled, linked: !!l, displayName: l?.display_name ?? null, pushEnabled: !!l?.push_enabled, pending: (q.lineDraftCount.get(accountId) as { n: number }).n })
+  })
+  app.post('/api/line/link-code', (c) => {
+    if (!line?.enabled) return c.json({ error: 'line_disabled' }, 404)
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    if (!lineCodeLimiter(clientIp(c.req.raw.headers))) return c.json({ error: 'rate_limited' }, 429)
+    q.lineCodeDelete.run('', now())
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    const bytes = randomBytes(6)
+    const code = [...bytes].map((b) => alphabet[b % alphabet.length]).join('')
+    q.lineCodeInsert.run(code, accountId, now() + 15 * 60_000)
+    return c.json({ code, expiresIn: 900 })
+  })
+  app.delete('/api/line/link', (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    q.lineUnlink.run(accountId)
+    return c.json({ ok: true })
+  })
+  app.post('/api/line/push', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const body = await c.req.json().catch(() => null)
+    q.lineSetPush.run(body?.enabled ? 1 : 0, accountId)
+    return c.json({ ok: true })
+  })
+  app.post('/api/line/ack', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const body = await c.req.json().catch(() => null)
+    for (const id of Array.isArray(body?.ids) ? body.ids : []) if (Number.isInteger(id)) q.lineDraftAck.run(id, accountId)
+    return c.json({ ok: true })
+  })
+  app.post('/api/line/webhook', async (c) => {
+    if (!line?.enabled) return c.json({ error: 'not_found' }, 404)
+    const raw = await c.req.text()
+    if (!line.verify(raw, c.req.header('x-line-signature'))) return c.json({ error: 'bad_signature' }, 401)
+    let body: { events?: LineEvent[] }
+    try {
+      body = JSON.parse(raw)
+    } catch {
+      return c.json({ error: 'bad_request' }, 400)
+    }
+    // 先回 200，事件在背景處理（官方建議）
+    for (const ev of body.events ?? []) handleLineEvent(ev).catch((e) => console.error('line event failed', (e as Error).message?.slice(0, 200)))
+    return c.json({})
+  })
+
+  interface LineEvent {
+    type: string
+    replyToken?: string
+    source?: { type: string; userId?: string; groupId?: string }
+    message?: { type: string; id: string; text?: string }
+  }
+  const APP_URL = publicOrigin || 'https://spilt.chung.men'
+  const draftReply = (n: number, what: string) => [{ type: 'text', text: `收到${what}！已放進你的 LINE 收件匣（${n} 筆待處理）。打開 App 一鍵建帳本 👉 ${APP_URL}` }]
+  async function handleLineEvent(ev: LineEvent) {
+    if (!line) return
+    const userId = ev.source?.userId
+    if (ev.type === 'follow' && ev.replyToken) return line.reply(ev.replyToken, [{ type: 'text', text: LINE_HELP }])
+    if (ev.type !== 'message' || !ev.message || !ev.replyToken || !userId) return
+    // 群組裡只處理有 @ 我或「連結」的訊息？先簡化：群組訊息一律忽略，只處理一對一
+    if (ev.source?.type !== 'user') return
+    const linked = q.lineByUser.get(userId) as { account_id: string } | undefined
+    const m = ev.message
+    if (m.type === 'text') {
+      const text = (m.text ?? '').trim()
+      const code = /^(?:連結|link)\s*([A-Za-z0-9]{6})$/i.exec(text)?.[1]?.toUpperCase()
+      if (code) {
+        const row = q.lineCodeGet.get(code) as { account_id: string; expires_at: number } | undefined
+        if (!row || row.expires_at < now()) return line.reply(ev.replyToken, [{ type: 'text', text: '這組連結碼無效或過期了，到 App 設定頁再拿一組（15 分鐘內有效）。' }])
+        const prof = await line.getProfile(userId)
+        q.lineLink.run(userId, row.account_id, prof?.displayName ?? null, now())
+        q.lineCodeDelete.run(code, now())
+        return line.reply(ev.replyToken, [{ type: 'text', text: `連結好了，${prof?.displayName ?? '你好'}！以後直接傳收據照片或一句話給我，我幫你變成帳本草稿 ✨` }])
+      }
+      if (!linked) return line.reply(ev.replyToken, [{ type: 'text', text: LINE_HELP }])
+      if (/^(help|說明|幫助|\?)$/i.test(text)) return line.reply(ev.replyToken, [{ type: 'text', text: LINE_HELP }])
+      if ((q.lineDraftCount.get(linked.account_id) as { n: number }).n >= 50) return line.reply(ev.replyToken, [{ type: 'text', text: '收件匣滿了（50 筆），先到 App 處理一下吧。' }])
+      q.lineDraftInsert.run(linked.account_id, 'text', JSON.stringify({ text: text.slice(0, 2000) }), now())
+      return line.reply(ev.replyToken, draftReply((q.lineDraftCount.get(linked.account_id) as { n: number }).n, '一句話'))
+    }
+    if (m.type === 'image') {
+      if (!linked) return line.reply(ev.replyToken, [{ type: 'text', text: '先連結帳號我才能幫你存收據喔～\n' + LINE_HELP }])
+      if ((q.lineDraftCount.get(linked.account_id) as { n: number }).n >= 50) return line.reply(ev.replyToken, [{ type: 'text', text: '收件匣滿了（50 筆），先到 App 處理一下吧。' }])
+      const img = await line.getContent(m.id)
+      if (!img) return line.reply(ev.replyToken, [{ type: 'text', text: '圖片抓不下來，再傳一次試試。' }])
+      // 站方 AI 有開就先解析成品項，不然把圖存起來讓 App 端辨識
+      let payload: Record<string, unknown> = { image: img }
+      if (ai?.enabled && aiAllowedFor(linked.account_id)) {
+        try {
+          const parsed = await ai.parse({ image: img })
+          payload = { receipt: parsed }
+          q.aiBump.run(linked.account_id, dayOf())
+        } catch (e) {
+          console.error('line receipt parse failed', (e as Error).message?.slice(0, 120))
+        }
+      }
+      q.lineDraftInsert.run(linked.account_id, payload.receipt ? 'receipt' : 'image', JSON.stringify(payload), now())
+      const n = (q.lineDraftCount.get(linked.account_id) as { n: number }).n
+      const items = (payload.receipt as { items?: { name: string }[] } | undefined)?.items
+      return line.reply(ev.replyToken, items?.length ? [{ type: 'text', text: `辨識到 ${items.length} 項：${items.slice(0, 4).map((i) => i.name).join('、')}${items.length > 4 ? '…' : ''}\n已放進收件匣（${n} 筆）。打開 App 一鍵建帳本 👉 ${APP_URL}` }] : draftReply(n, '收據'))
+    }
+    return line.reply(ev.replyToken, [{ type: 'text', text: '目前只吃文字和圖片～\n' + LINE_HELP }])
+  }
+
   app.get('/api/push/vapid', (c) => (push ? c.json({ publicKey: push.publicKey }) : c.json({ error: 'not_found' }, 404)))
   app.post('/api/push/subscribe', async (c) => {
     if (!push) return c.json({ error: 'not_found' }, 404)
@@ -616,6 +751,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
   const purgeInactive = () => {
     const r = q.purgeInactive.run(now() - inactiveDays * 86_400_000)
     q.tripPurge.run(now() - inactiveDays * 86_400_000)
+    q.lineDraftPurge.run(now() - 30 * 86_400_000)
     return Number(r.changes)
   }
   return { app, purgeExpired, purgeInactive }

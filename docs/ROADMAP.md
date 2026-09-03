@@ -105,6 +105,12 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 - `Trip` 容器：一趟旅程裝多本各自分類的帳（`Project.tripId`）；旅程頁跨本抵銷結算（`tripSettlement`）、AI 總結；墓碑 `trip:<id>`。
 - 共編：`src/lib/tripSync.ts`，一趟一把 `bt1.` 金鑰（連結 `#/join/<id>/<secret>`），HKDF 派生 token（伺服器 `trips` 表只存 hash、密文、版本）。成員以 `share.myPersonId` 對應旅程內的人。推：改動 2.5 秒後；拉：開旅程頁、回前景、帳號同步後。衝突用 `mergeBundle`（沿用 mergeData）。內容與伺服器相同就不推（`bundleHash`）。
 
+## LINE 機器人（2026-09-04 ✅ 程式完成，待填 token）
+
+- Reply 型（免費）：加好友說明、連結碼綁帳號、一句話／收據照片 → 收件匣草稿 → App 一鍵建帳本。Push 型（吃額度、可關）：「我轉了」通知。
+- 設定：LINE Developers 建 Messaging API channel → `.env` 填 `LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN` → pm2 restart → console 設 Webhook URL 並 Verify。
+- 好友名單 API（followers/ids、群組成員）需認證帳號，一般帳號 403；名單只能從互動事件累積。
+
 ## 第三階段：智慧匯入
 
 - ✅ 2026-09-03 伺服器端 AI 收據辨識 `POST /api/parse`（`server/src/ai.ts`，MiniMax OpenAI 相容 API：文字 M2.5、圖片 M3；每帳號每日 `AI_DAILY_QUOTA` 次）。前端圖片／PDF／貼上文字都可切 AI；`src/lib/pdf.ts` 用 pdfjs 抽文字層或轉圖。

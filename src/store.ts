@@ -88,6 +88,9 @@ interface State {
   sync: SyncState
   tutorialOpen: boolean
   setTutorialOpen: (v: boolean) => void
+  /** LINE 機器人收件匣（來自 /api/sync，不落地） */
+  lineDrafts: import('./lib/line').LineDraft[]
+  setLineDrafts: (d: import('./lib/line').LineDraft[]) => void
 
   init: () => Promise<void>
   unlock: (pin: string) => Promise<boolean>
@@ -182,6 +185,8 @@ export const useStore = create<State>((set, get) => ({
   sync: { status: 'off', lastSyncAt: loadSyncMeta().lastSyncAt, error: null, dirty: loadSyncMeta().dirty },
   tutorialOpen: false,
   setTutorialOpen: (v) => set({ tutorialOpen: v }),
+  lineDrafts: [],
+  setLineDrafts: (d) => set({ lineDrafts: d }),
 
   init: async () => {
     const blob = await readBlob()
@@ -623,6 +628,7 @@ export const useStore = create<State>((set, get) => ({
       }
 
       set({ sync: { status: 'idle', lastSyncAt: meta.lastSyncAt, error: null, dirty: meta.dirty } })
+      if (Array.isArray((remote as { lineDrafts?: unknown }).lineDrafts)) set({ lineDrafts: (remote as unknown as { lineDrafts: import('./lib/line').LineDraft[] }).lineDrafts })
       get().syncTrips().catch(() => {})
       if (toastMsg) get().showToast(toastMsg, '💸')
       else if (!quiet) get().showToast('同步完成', '☁️')
