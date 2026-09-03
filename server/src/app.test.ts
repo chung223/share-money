@@ -27,6 +27,8 @@ function setup(t0 = T0) {
     renderOgImage: async (i) => Buffer.from('PNG:' + i.title),
     ai: { enabled: true, parse: async (input) => { aiCalls.push(input); return { items: [{ name: '牛肉麵', qty: 1, price: 180 }], extras: [], total: 180, date: null, currency: 'TWD', merchant: null } } },
     aiDailyQuota: 2,
+    aiGlobalDaily: 3,
+    aiInviteCode: 'friends-only',
   })
   const call = (path: string, init: RequestInit = {}, token?: string, ip = '1.2.3.4') =>
     app.request(path, { ...init, headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
@@ -205,20 +207,37 @@ describe('open graph', () => {
 })
 
 describe('ai parse', () => {
-  it('requires auth, enforces the daily quota, validates images', async () => {
+  it('needs an invite code (or admin allow), then enforces per-account and global quotas', async () => {
     const { call, tick, aiCalls } = setup()
     expect((await call('/api/parse', post({ text: 'x' }))).status).toBe(401)
+    // not allowed yet
+    let r = await call('/api/parse', post({ text: '牛肉麵 180' }), A)
+    expect(r.status).toBe(403)
+    expect((await body(call('/api/ai/status', {}, A)))).toMatchObject({ available: true, allowed: false, needsCode: true, quota: 2 })
+    expect((await call('/api/ai/redeem', post({ code: 'wrong' }), A)).status).toBe(403)
+    expect((await body(call('/api/ai/redeem', post({ code: 'friends-only' }), A))).allowed).toBe(true)
     expect((await call('/api/parse', post({}), A)).status).toBe(400)
     expect((await call('/api/parse', post({ image: { mediaType: 'text/html', base64: 'x' } }), A)).status).toBe(400)
-    let r = await body(call('/api/parse', post({ text: '牛肉麵 180' }), A))
-    expect(r.items[0].name).toBe('牛肉麵')
-    expect(r.remaining).toBe(1)
+    let j = await body(call('/api/parse', post({ text: '牛肉麵 180' }), A))
+    expect(j.items[0].name).toBe('牛肉麵')
+    expect(j.remaining).toBe(1)
     await call('/api/parse', post({ image: { mediaType: 'image/jpeg', base64: 'AAAA' } }), A)
     expect(aiCalls).toHaveLength(2)
-    expect((await call('/api/parse', post({ text: 'x' }), A)).status).toBe(429)
+    expect((await call('/api/parse', post({ text: 'x' }), A)).status).toBe(429) // per-account
+    // admin allows B directly; global cap (3) then bites after one more call
+    const list = await body(call('/api/admin/ai', {}, 'admin-secret'))
+    expect(list.accounts).toHaveLength(1)
+    expect(list.globalUsed).toBe(2)
+    const bId = (await body(call('/api/ai/status', {}, B))).accountId
+    expect((await call('/api/admin/ai', post({ accountId: bId, allow: true, note: '朋友' }), 'admin-secret')).status).toBe(200)
+    expect((await call('/api/parse', post({ text: 'x' }), B)).status).toBe(200)
+    expect((await call('/api/parse', post({ text: 'x' }), B)).status).toBe(429) // global
+    expect((await call('/api/admin/ai', post({ accountId: bId, allow: false }), 'admin-secret')).status).toBe(200)
     tick(86_400_000)
-    expect((await call('/api/parse', post({ text: 'x' }), A)).status).toBe(200)
+    expect((await call('/api/parse', post({ text: 'x' }), B)).status).toBe(403) // revoked
+    expect((await call('/api/parse', post({ text: 'x' }), A)).status).toBe(200) // new day
     expect((await body(call('/api/health'))).ai).toBe(true)
+    expect((await call('/api/admin/ai')).status).toBe(401)
   })
   it('normalises sloppy model output', () => {
     const out = normalise('好的，這是結果：{"items":[{"name":"1. 珍奶","qty":"2","price":"65"},{"name":"","price":10},{"name":"x","price":0}],"extras":[{"name":"折扣","amount":-20}],"total":"150","date":"2026/09/03","currency":"twd"}')
@@ -229,5 +248,7 @@ describe('ai parse', () => {
     expect(out.currency).toBeNull()
     expect(() => normalise('nothing')).toThrow()
     expect(normalise('<think>想一下</think>```json\n{"items":[{"name":"a","qty":1,"price":5}]}\n```').items).toHaveLength(1)
+    // trailing prose / second object after the JSON must not break parsing
+    expect(normalise('{"items":[{"name":"a \\"b\\"","qty":1,"price":5}],"total":5} 以上是結果 {"x":1}').total).toBe(5)
   })
 })

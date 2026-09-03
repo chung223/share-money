@@ -73,9 +73,9 @@ export function createAiParser(opts: { apiKey?: string; baseUrl?: string; model?
 export function normalise(raw: string): ParseOutput {
   // M2/M3 會先吐 <think>…</think>，再給答案；也可能包在 ```json 裡
   const text = raw.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/```(?:json)?/g, '')
-  const m = /\{[\s\S]*\}/.exec(text)
-  if (!m) throw new Error('no json in model output')
-  const j = JSON.parse(m[0]) as Partial<ParseOutput>
+  const jsonText = firstJsonObject(text)
+  if (!jsonText) throw new Error('no json in model output')
+  const j = JSON.parse(jsonText) as Partial<ParseOutput>
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : null)
   const items = (Array.isArray(j.items) ? j.items : [])
     .map((it) => ({ name: String(it?.name ?? '').trim().slice(0, 60), qty: Math.max(1, Math.min(999, Math.round(num(it?.qty) ?? 1))), price: num(it?.price) ?? 0 }))
@@ -88,4 +88,27 @@ export function normalise(raw: string): ParseOutput {
   const date = typeof j.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(j.date) ? j.date : null
   const currency = typeof j.currency === 'string' && /^[A-Z]{3}$/.test(j.currency) ? j.currency : null
   return { items, extras, total: num(j.total), date, currency, merchant: typeof j.merchant === 'string' ? j.merchant.slice(0, 60) : null }
+}
+
+/** 取出第一個大括號平衡的 JSON 物件（模型偶爾會在後面再補說明或第二個物件）。 */
+export function firstJsonObject(text: string): string | null {
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  let inStr = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inStr) {
+      if (ch === '\\') i++
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') inStr = true
+    else if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return null
 }

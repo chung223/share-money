@@ -15,6 +15,7 @@ const SHARE_HTML = process.env.SHARE_HTML ?? join(import.meta.dirname, '..', '..
 
 const ai = createAiParser({ apiKey: process.env.MINIMAX_API_KEY, baseUrl: process.env.MINIMAX_BASE_URL, model: process.env.MINIMAX_MODEL, visionModel: process.env.MINIMAX_VISION_MODEL })
 if (!ai.enabled) console.warn('MINIMAX_API_KEY not set: AI receipt parsing disabled')
+else if (!process.env.AI_INVITE_CODE && process.env.AI_OPEN !== '1') console.warn('AI enabled but no AI_INVITE_CODE and AI_OPEN!=1: only admin-allowed accounts can use it')
 
 let push: PushSender | undefined
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
@@ -36,7 +37,7 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
 } else console.warn('VAPID keys not set: push disabled')
 
 const db = openDb(join(DATA_DIR, 'banban.db'))
-const { app, purgeExpired, purgeInactive } = createApp({ db, corsOrigin: CORS_ORIGIN, adminToken: ADMIN_TOKEN, inactiveDays: INACTIVE_DAYS, push, publicOrigin: PUBLIC_ORIGIN, shareHtml: SHARE_HTML, ai, aiDailyQuota: Number(process.env.AI_DAILY_QUOTA ?? 40) })
+const { app, purgeExpired, purgeInactive } = createApp({ db, corsOrigin: CORS_ORIGIN, adminToken: ADMIN_TOKEN, inactiveDays: INACTIVE_DAYS, push, publicOrigin: PUBLIC_ORIGIN, shareHtml: SHARE_HTML, ai, aiDailyQuota: Number(process.env.AI_DAILY_QUOTA ?? 40), aiGlobalDaily: Number(process.env.AI_GLOBAL_DAILY ?? 300), aiInviteCode: process.env.AI_INVITE_CODE || undefined, aiOpen: process.env.AI_OPEN === '1' })
 
 // 每小時：清過期一週以上的分享連結；刪 INACTIVE_DAYS 天沒同步的帳號（連同資料與分享）
 const housekeeping = () => {

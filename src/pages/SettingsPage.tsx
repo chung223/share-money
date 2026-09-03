@@ -10,6 +10,7 @@ import PayInfoSection from '../components/PayInfoSection'
 import GroupsSection from '../components/GroupsSection'
 import UpdateSection from '../components/UpdateSection'
 import PushSection from '../components/PushSection'
+import AiSection from '../components/AiSection'
 
 export function PersonEditor({ person, onChange, onDelete, title }: { person: Person; onChange: (p: Person) => void; onDelete?: () => void; title: string }) {
   return (
@@ -155,6 +156,7 @@ export default function SettingsPage() {
 
         <SyncSection />
         <PushSection />
+        <AiSection />
         <PayInfoSection />
 
         <section className="card stack">

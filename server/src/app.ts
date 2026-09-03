@@ -24,6 +24,12 @@ export interface AppOptions {
   ai?: AiParser
   /** Per-account daily quota for /api/parse. */
   aiDailyQuota?: number
+  /** Hard ceiling for everyone combined per day (protects the API bill). */
+  aiGlobalDaily?: number
+  /** Users must redeem this code once before /api/parse works. Unset + aiOpen=false = only admin-allowed accounts. */
+  aiInviteCode?: string
+  /** true = everyone may use AI without a code (not recommended). */
+  aiOpen?: boolean
   /** Test hook: replace the PNG renderer. */
   renderOgImage?: (i: { title: string; subtitle: string; mood?: 'happy' | 'wow' | 'sleepy' }) => Promise<Buffer>
 }
@@ -84,7 +90,7 @@ function makeLimiter(limit: number, windowMs: number, now: () => number) {
 
 type Vars = { accountId: string }
 
-export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40 }: AppOptions) {
+export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40, aiGlobalDaily = 300, aiInviteCode, aiOpen = false }: AppOptions) {
   const app = new Hono<{ Variables: Vars }>()
   const q = {
     accountByHash: db.raw.prepare('SELECT id FROM accounts WHERE token_hash = ?'),
@@ -118,6 +124,19 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     ackEvent: db.raw.prepare('UPDATE share_events SET acked = 1 WHERE id = ? AND share_id IN (SELECT id FROM shares WHERE account_id = ?)'),
     purgeExpired: db.raw.prepare('DELETE FROM shares WHERE expires_at < ?'),
     purgeInactive: db.raw.prepare('DELETE FROM accounts WHERE last_seen_at < ?'),
+    aiFlag: db.raw.prepare('SELECT ai_allowed, note FROM account_flags WHERE account_id = ?'),
+    setAiFlag: db.raw.prepare('INSERT INTO account_flags (account_id, ai_allowed, note, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET ai_allowed = excluded.ai_allowed, note = COALESCE(excluded.note, account_flags.note), updated_at = excluded.updated_at'),
+    aiUsed: db.raw.prepare('SELECT n FROM ai_usage WHERE account_id = ? AND day = ?'),
+    aiBump: db.raw.prepare('INSERT INTO ai_usage (account_id, day, n) VALUES (?, ?, 1) ON CONFLICT(account_id, day) DO UPDATE SET n = n + 1'),
+    aiGlobal: db.raw.prepare('SELECT COALESCE(SUM(n), 0) AS n FROM ai_usage WHERE day = ?'),
+    aiAdminList: db.raw.prepare(
+      `SELECT a.id, a.created_at, a.last_seen_at, COALESCE(f.ai_allowed, 0) AS ai_allowed, f.note,
+        COALESCE((SELECT n FROM ai_usage u WHERE u.account_id = a.id AND u.day = ?), 0) AS today,
+        COALESCE((SELECT SUM(n) FROM ai_usage u WHERE u.account_id = a.id), 0) AS total
+       FROM accounts a LEFT JOIN account_flags f ON f.account_id = a.id
+       WHERE f.ai_allowed = 1 OR EXISTS (SELECT 1 FROM ai_usage u WHERE u.account_id = a.id)
+       ORDER BY total DESC`,
+    ),
     stats: db.raw.prepare(
       `SELECT
         (SELECT COUNT(*) FROM accounts) AS accounts,
@@ -335,31 +354,80 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     return c.json({ ok: true })
   })
 
-  // --- AI receipt parsing (needs an account for the quota; content is never stored) ---
-  const aiUsage = new Map<string, { day: string; n: number }>()
+  // --- AI receipt parsing: invite-code / admin allowlist + per-account and global daily quotas (content is never stored) ---
+  // 以台灣時間算「今天」，不然晚上八點就換日
+  const dayOf = () => new Date(now()).toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' })
+  const aiAllowedFor = (accountId: string) => aiOpen || ((q.aiFlag.get(accountId) as { ai_allowed: number } | undefined)?.ai_allowed ?? 0) === 1
+  const aiStatusFor = (accountId: string) => {
+    const day = dayOf()
+    const used = (q.aiUsed.get(accountId, day) as { n: number } | undefined)?.n ?? 0
+    const global = (q.aiGlobal.get(day) as { n: number }).n
+    return {
+      available: !!ai?.enabled,
+      allowed: !!ai?.enabled && aiAllowedFor(accountId),
+      needsCode: !!aiInviteCode && !aiOpen,
+      used,
+      quota: aiDailyQuota,
+      remaining: Math.max(0, Math.min(aiDailyQuota - used, aiGlobalDaily - global)),
+      accountId,
+    }
+  }
+  const redeemLimiter = makeLimiter(10, 3_600_000, now)
+
+  app.get('/api/ai/status', (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    return c.json(aiStatusFor(accountId))
+  })
+  app.post('/api/ai/redeem', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    if (!redeemLimiter(clientIp(c.req.raw.headers))) return c.json({ error: 'rate_limited' }, 429)
+    const body = await c.req.json().catch(() => null)
+    const code = typeof body?.code === 'string' ? body.code.trim() : ''
+    if (!aiInviteCode || !code || code !== aiInviteCode) return c.json({ error: 'bad_code' }, 403)
+    q.setAiFlag.run(accountId, 1, 'invite', now())
+    return c.json(aiStatusFor(accountId))
+  })
   app.post('/api/parse', async (c) => {
     if (!ai?.enabled) return c.json({ error: 'ai_disabled' }, 404)
     const accountId = requireAuth(c)
     if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
-    const day = new Date(now()).toISOString().slice(0, 10)
-    const u = aiUsage.get(accountId)
-    const n = u && u.day === day ? u.n : 0
-    if (n >= aiDailyQuota) return c.json({ error: 'quota', quota: aiDailyQuota }, 429)
+    if (!aiAllowedFor(accountId)) return c.json({ error: 'not_allowed', needsCode: !!aiInviteCode }, 403)
+    const st = aiStatusFor(accountId)
+    if (st.remaining <= 0) return c.json({ error: 'quota', quota: aiDailyQuota, used: st.used }, 429)
     const body = await c.req.json().catch(() => null)
     const text = typeof body?.text === 'string' ? body.text.slice(0, 8000) : undefined
     const img = body?.image
     const image =
       img && typeof img.base64 === 'string' && img.base64.length < 6_000_000 && /^image\/(jpeg|png|webp|gif)$/.test(img.mediaType ?? '') ? { mediaType: img.mediaType as string, base64: img.base64 as string } : undefined
     if (!text && !image) return c.json({ error: 'bad_request' }, 400)
-    aiUsage.set(accountId, { day, n: n + 1 })
-    if (aiUsage.size > 5000) aiUsage.clear()
+    q.aiBump.run(accountId, dayOf())
     try {
       const out = await ai.parse({ text, image })
-      return c.json({ ...out, remaining: aiDailyQuota - n - 1 })
+      return c.json({ ...out, remaining: st.remaining - 1 })
     } catch (e) {
       console.error('ai parse failed', (e as Error).message)
       return c.json({ error: 'ai_failed' }, 502)
     }
+  })
+  // admin: who may use AI and how much they used
+  const adminOk = (c: import('hono').Context<{ Variables: Vars }>) => {
+    const m = /^Bearer\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')
+    return !!adminToken && !!m && m[1] === adminToken
+  }
+  app.get('/api/admin/ai', (c) => {
+    if (!adminOk(c)) return c.json({ error: 'unauthorized' }, 401)
+    const day = dayOf()
+    return c.json({ day, globalUsed: (q.aiGlobal.get(day) as { n: number }).n, globalDaily: aiGlobalDaily, quota: aiDailyQuota, open: aiOpen, inviteCodeSet: !!aiInviteCode, accounts: q.aiAdminList.all(day) })
+  })
+  app.post('/api/admin/ai', async (c) => {
+    if (!adminOk(c)) return c.json({ error: 'unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    if (!body || typeof body.accountId !== 'string' || typeof body.allow !== 'boolean') return c.json({ error: 'bad_request' }, 400)
+    if (!(q.accountByHash as unknown as { get: unknown }) || !db.raw.prepare('SELECT 1 FROM accounts WHERE id = ?').get(body.accountId)) return c.json({ error: 'not_found' }, 404)
+    q.setAiFlag.run(body.accountId, body.allow ? 1 : 0, typeof body.note === 'string' ? body.note.slice(0, 60) : null, now())
+    return c.json({ ok: true })
   })
 
   // --- web push ---

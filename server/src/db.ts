@@ -48,6 +48,18 @@ CREATE TABLE IF NOT EXISTS push_subs (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS push_subs_account ON push_subs(account_id);
+CREATE TABLE IF NOT EXISTS account_flags (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  ai_allowed INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_usage (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  n INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (account_id, day)
+);
 `
 
 /** Columns added after the first release; ALTER is idempotent via PRAGMA check. */
