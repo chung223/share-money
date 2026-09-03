@@ -5,6 +5,8 @@ import { CURRENCIES, PALETTE, PERSON_EMOJIS, type Person } from '../lib/types'
 import { Avatar, EmojiPicker, Sheet } from '../components/ui'
 import PinPad from '../components/PinPad'
 import type { LockDelay } from '../lib/storage'
+import SyncSection from '../components/SyncSection'
+import PayInfoSection from '../components/PayInfoSection'
 
 export function PersonEditor({ person, onChange, onDelete, title }: { person: Person; onChange: (p: Person) => void; onDelete?: () => void; title: string }) {
   return (
@@ -147,6 +149,9 @@ export default function SettingsPage() {
           )}
         </section>
 
+        <SyncSection />
+        <PayInfoSection />
+
         <section className="card stack">
           <div className="section-title">🎨 外觀</div>
           <div className="chip-row">
@@ -239,7 +244,7 @@ export default function SettingsPage() {
         </section>
 
         <p className="muted small center-text">
-          반반 BanBan · 所有資料只存在你的裝置 · <a href="https://github.com/chung223/share-money" target="_blank" rel="noreferrer">GitHub</a>
+          반반 BanBan · 資料存在你的裝置，同步時先加密 · <a href="https://github.com/chung223/share-money" target="_blank" rel="noreferrer">GitHub</a>
         </p>
       </main>
 

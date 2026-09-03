@@ -5,6 +5,7 @@ import { computeSplit, fmtMoney, itemTotal, resolveSharers, summaryText } from '
 import { fetchRate } from '../lib/rates'
 import { CURRENCIES, PROJECT_EMOJIS, currencyMeta, type Extra, type Item, type Person, type Project, type SplitMode } from '../lib/types'
 import { Avatar, Confetti, EmojiPicker, Empty, MoneyInput, Segmented, Sheet } from '../components/ui'
+import ShareLinkSheet from '../components/ShareLinkSheet'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
 import { PersonEditor } from './SettingsPage'
 
@@ -594,6 +595,7 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
   const showToast = useStore((s) => s.showToast)
   const [open, setOpen] = useState<string | null>(null)
   const [confetti, setConfetti] = useState(false)
+  const [linkOpen, setLinkOpen] = useState(false)
   const foreign = p.currency !== base
   const others = result.people.filter((r) => !r.isPayer)
   const allSettled = others.length > 0 && others.every((r) => r.settled)
@@ -703,7 +705,11 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
       <button type="button" className="btn btn--primary btn--lg" onClick={share}>
         📤 分享結果
       </button>
-      <p className="muted small center-text">會產生一段文字，直接貼到群組就好。</p>
+      <button type="button" className={`btn btn--lg ${p.share && p.share.expiresAt > Date.now() ? 'btn--mint' : 'btn--ghost'}`} onClick={() => setLinkOpen(true)}>
+        🔗 {p.share && p.share.expiresAt > Date.now() ? '連結已開，朋友可以按「我轉了」' : '給朋友的連結'}
+      </button>
+      <p className="muted small center-text">上面是純文字；下面的連結讓朋友看自己的份、按一下回報轉帳。</p>
+      <ShareLinkSheet p={p} open={linkOpen} onClose={() => setLinkOpen(false)} />
     </main>
   )
 }

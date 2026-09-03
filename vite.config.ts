@@ -1,14 +1,37 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig, type Plugin } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { resolve } from 'node:path'
+
+// Dev-only: /s/<id> -> s/index.html (production nginx does the same with try_files), /api -> local server.
+function sharePages(): Plugin {
+  return {
+    name: 'banban-share-pages',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        if (req.url && /^\/s\/[A-Za-z0-9_-]+\/?(\?.*)?$/.test(req.url)) req.url = '/s/index.html'
+        next()
+      })
+    },
+  }
+}
 
 // BASE_PATH lets the GitHub Pages workflow build under /<repo>/ while local dev stays at /.
 const base = process.env.BASE_PATH ?? '/'
 
 export default defineConfig({
   base,
+  build: {
+    rollupOptions: {
+      input: { main: resolve(import.meta.dirname, 'index.html'), share: resolve(import.meta.dirname, 's/index.html') },
+    },
+  },
+  server: {
+    proxy: { '/api': 'http://127.0.0.1:3456' },
+  },
   plugins: [
     react(),
+    sharePages(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg', 'apple-touch-icon.png', 'mascot.svg'],
@@ -30,6 +53,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // Share pages and the API are never the app shell.
+        navigateFallbackDenylist: [/^\/s\//, /^\/api\//],
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         runtimeCaching: [
           {
@@ -49,6 +74,6 @@ export default defineConfig({
   ],
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'server/src/**/*.test.ts'],
   },
 })

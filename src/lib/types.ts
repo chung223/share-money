@@ -52,6 +52,35 @@ export interface Project {
   /** personId -> paid back to payer */
   settled: Record<Id, boolean>
   note?: string
+  /** Friend-facing share link (see lib/share.ts). Snapshot is re-uploaded on sync when stale. */
+  share?: ProjectShare
+}
+
+export interface ProjectShare {
+  id: string
+  /** base64url AES-GCM key; lives only in the URL fragment and in the owner's (encrypted) data. */
+  key: string
+  expiresAt: number
+  /** project.updatedAt at the time the snapshot was uploaded; older than updatedAt = needs re-upload. */
+  uploadedAt: number
+}
+
+/** How friends can pay you back. Shown on the share page and in reminder messages. */
+export interface PayInfo {
+  bankCode?: string
+  bankName?: string
+  account?: string
+  linePay?: string
+  note?: string
+}
+
+/** Multi-device sync (end-to-end encrypted; see lib/sync.ts). */
+export interface SyncConfig {
+  /** bb1.<base64url 32 bytes>: everything is derived from this. Never sent to the server as-is. */
+  secret: string
+  /** '' = same origin as the app. */
+  serverUrl: string
+  enabledAt: number
 }
 
 export interface AppData {
@@ -60,6 +89,12 @@ export interface AppData {
   friends: Person[]
   projects: Project[]
   baseCurrency: string
+  payInfo?: PayInfo
+  sync?: SyncConfig
+  /** Tombstones: projectId -> deletion time, so a delete wins over a stale copy on another device. */
+  deleted?: Record<Id, number>
+  /** Bumped on every change; used to pick the newer side for scalar fields when merging. */
+  updatedAt?: number
 }
 
 export const PALETTE = ['pink', 'mint', 'lavender', 'butter', 'sky', 'peach', 'lime', 'grape'] as const

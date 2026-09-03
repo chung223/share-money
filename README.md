@@ -22,26 +22,45 @@
 - 📤 **一鍵分享**：產生文字直接貼到 LINE 群組。
 - 🌙 **深色模式**、📱 **PWA**（可加到手機主畫面、離線可用）。
 
+- ☁️ **多裝置同步**（端對端加密）：一把金鑰、掃 QR 就能把手機和電腦連起來，伺服器只存亂碼。
+- 🔗 **給朋友的連結**：朋友點開看自己那份和你的收款資訊，按「我轉了」你這邊自動打勾。
+- 💳 **收款方式**：銀行代碼帳號、LINE Pay / 街口連結，放在分享頁上。
+
 ## 資料在哪裡？
 
-全部只存在你的瀏覽器（IndexedDB）裡，沒有後端、不上傳。唯一的對外請求是抓匯率，只送出幣別與日期。設定 PIN 後資料會加密，PIN 本身不會被儲存；忘記 PIN 只能清除資料重來。記得定期在設定頁「匯出備份」。
+預設只存在你的瀏覽器（IndexedDB）裡。設定 PIN 後資料會加密，PIN 本身不會被儲存；忘記 PIN 只能清除資料重來。
 
-## 部署到 GitHub Pages
+開了「多裝置同步」之後，資料會先用同步金鑰派生的 AES 金鑰加密再上傳，伺服器（`server/`）只看得到密文和版本號；分享連結的內容也是加密的，解密金鑰在網址 `#` 後面、不會送到伺服器。對外請求只有：抓匯率（幣別與日期）、同步、分享。記得定期在設定頁「匯出備份」。
 
-1. 把這個分支合併到 `main`。
-2. GitHub 專案 **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。
-3. 之後每次推到 `main` 會自動部署到 `https://<你的帳號>.github.io/share-money/`。
+## 部署
 
-手機開啟後用「加入主畫面」，就像原生 App 一樣（相機掃描需要 HTTPS，GitHub Pages 預設就有）。
+正式站：`https://spilt.chung.men`（VPS + aaPanel + PM2 + Nginx）。細節見 [`docs/ROADMAP.md`](docs/ROADMAP.md) 與 `deploy/`：
+
+```bash
+deploy/update.sh        # git pull → npm ci（前後端）→ 測試 → build → pm2 restart banban
+deploy/backup-db.sh     # 每日 SQLite 備份（cron）
+```
+
+GitHub Pages（純前端、沒有同步與分享功能）仍會在推到 `main` 時自動部署到 `https://chung223.github.io/share-money/`。
+
+## 後端
+
+```bash
+cd server && npm install
+npm run dev      # http://127.0.0.1:3456，資料在 server/data/
+npm run typecheck
+```
+
+環境變數：`PORT`（3456）、`DATA_DIR`、`CORS_ORIGIN`。前端 `npm run dev` 會把 `/api` 代理到本機後端。
 
 ## 開發
 
 ```bash
 npm install
 npm run dev      # 開發伺服器
-npm test         # 拆帳引擎、發票解析、明細解析的單元測試
+npm test         # 拆帳引擎、發票解析、同步合併、後端 API 的單元測試
 npm run build    # 型別檢查 + 打包到 dist/
 npm run icons    # 從 public/icon.svg 重新產生 PWA 圖示
 ```
 
-技術：Vite + React + TypeScript、zustand、jsQR、Tesseract.js、idb-keyval、vite-plugin-pwa。
+技術：Vite + React + TypeScript、zustand、jsQR、Tesseract.js、idb-keyval、vite-plugin-pwa、qrcode；後端 Hono + node:sqlite。

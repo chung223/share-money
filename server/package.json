@@ -1,0 +1,21 @@
+{
+  "name": "banban-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "반반 BanBan 後端：端對端加密同步、分享連結、「我轉了」事件",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning src/index.ts",
+    "dev": "node --no-warnings=ExperimentalWarning --watch src/index.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "hono": "^4.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2"
+  }
+}
