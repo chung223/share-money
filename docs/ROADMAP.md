@@ -95,6 +95,11 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 - crontab 每週一早上：列出還沒還的人與金額，推播給自己；可選一鍵轉發給對方。
 - 有人按「我轉了」立即推播。
 
+## AI 小幫手（2026-09-04 ✅）
+
+- 一句話開帳本（含語音）、AI 寫催款訊息、AI 幫我分品項。提示詞與正規化在 `src/lib/aiAssist.ts`，呼叫走 `aiChat`（自己的金鑰優先，否則站方 `/api/ai/chat`）。
+- 使用者可自帶 OpenAI 相容／Anthropic 金鑰（`AppData.aiProvider`），站方 AI 需邀請碼與每日額度。
+
 ## 第三階段：智慧匯入
 
 - ✅ 2026-09-03 伺服器端 AI 收據辨識 `POST /api/parse`（`server/src/ai.ts`，MiniMax OpenAI 相容 API：文字 M2.5、圖片 M3；每帳號每日 `AI_DAILY_QUOTA` 次）。前端圖片／PDF／貼上文字都可切 AI；`src/lib/pdf.ts` 用 pdfjs 抽文字層或轉圖。
