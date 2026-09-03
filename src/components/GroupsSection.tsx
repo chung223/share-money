@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useStore, uid } from '../store'
 import { PROJECT_EMOJIS, type Group, type SplitMode } from '../lib/types'
+
+const NO_GROUPS: Group[] = []
 import { Avatar, EmojiPicker, Segmented, Sheet } from './ui'
 
 const MODES: { value: SplitMode; label: string }[] = [
@@ -35,7 +37,7 @@ export function GroupEditor({ group, onChange }: { group: Group; onChange: (g: G
 }
 
 export default function GroupsSection() {
-  const groups = useStore((s) => s.data.groups ?? [])
+  const groups = useStore((s) => s.data.groups ?? NO_GROUPS)
   const me = useStore((s) => s.data.me)
   const update = useStore((s) => s.update)
   const [editing, setEditing] = useState<Group | null>(null)

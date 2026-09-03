@@ -1,0 +1,100 @@
+// @vitest-environment jsdom
+/**
+ * Renders every page in jsdom and fails on any React error (infinite loops, undefined access...).
+ * Not a visual test; it exists so a broken selector never ships a blank page again.
+ */
+import 'fake-indexeddb/auto'
+import { act, render, screen, cleanup } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+// jsdom gaps
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false }),
+})
+;(globalThis as { structuredClone?: unknown }).structuredClone ??= (v: unknown) => JSON.parse(JSON.stringify(v))
+
+import App from '../App'
+import { useStore, newProject } from '../store'
+
+beforeEach(() => {
+  localStorage.clear()
+  location.hash = ''
+  vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
+    throw new Error('console.error: ' + a.map(String).join(' '))
+  })
+})
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
+
+async function boot() {
+  render(<App />)
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50))
+  })
+}
+
+describe('pages render without crashing', () => {
+  it('home (empty), settings, and a project with people, payments, partial and groups', async () => {
+    await boot()
+    expect(await screen.findByText('還沒有帳本呢')).toBeTruthy()
+
+    await act(async () => {
+      useStore.getState().update((d) => {
+        d.friends.push({ id: 'f1', name: '小明', emoji: '🐰', color: 'mint' }, { id: 'f2', name: '小華', emoji: '🐻', color: 'sky' })
+        d.groups = [{ id: 'g1', name: '拉麵團', emoji: '🍜', personIds: ['me', 'f1', 'f2'], mode: 'items' }]
+        d.payInfo = { bankCode: '808', account: '123' }
+        const p = newProject(d.me, 'TWD')
+        p.name = '測試'
+        p.people = [d.me, ...d.friends]
+        p.items = [{ id: 'i1', name: '總額', price: 1000, qty: 1, sharedBy: 'all', kind: 'shared' }]
+        p.payments = [{ personId: 'me', amount: 700 }, { personId: 'f1', amount: 300 }]
+        p.partial = { f2_me: 100 }
+        p.rounding = 10
+        d.projects.push(p)
+      })
+    })
+    expect(await screen.findByText('測試')).toBeTruthy()
+
+    location.hash = '/settings'
+    await act(async () => {
+      dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(await screen.findByText('🍱 常用組合')).toBeTruthy()
+    expect(screen.getByText('☁️ 多裝置同步')).toBeTruthy()
+
+    const id = useStore.getState().data.projects[0].id
+    location.hash = `/p/${id}/items`
+    await act(async () => {
+      dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(await screen.findByText('👯 誰一起')).toBeTruthy()
+
+    location.hash = `/p/${id}/result`
+    await act(async () => {
+      dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(await screen.findByText('💸 誰轉給誰')).toBeTruthy()
+  })
+
+  it('project without payments (single payer) shows settle buttons', async () => {
+    await boot()
+    await act(async () => {
+      useStore.getState().update((d) => {
+        const p = newProject(d.me, 'JPY')
+        p.people = [d.me, { id: 'f1', name: '小明', emoji: '🐰', color: 'mint' }]
+        p.items = [{ id: 'i1', name: '總額', price: 3000, qty: 1, sharedBy: 'all', kind: 'shared' }]
+        p.rate = 0.22
+        d.projects.push(p)
+      })
+    })
+    const id = useStore.getState().data.projects[0].id
+    location.hash = `/p/${id}/result`
+    await act(async () => {
+      dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(await screen.findByText('還沒還')).toBeTruthy()
+    expect(screen.getByText('📣 催款')).toBeTruthy()
+  })
+})

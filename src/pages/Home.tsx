@@ -4,6 +4,10 @@ import { navigate } from '../router'
 import { computeSplit, fmtMoney } from '../lib/split'
 import { Empty, Mascot, Sheet } from '../components/ui'
 import type { Project } from '../lib/types'
+import type { Group } from '../lib/types'
+
+// zustand selectors must return a stable reference, or React re-renders forever
+const NO_GROUPS: Group[] = []
 
 const MODE_LABEL: Record<Project['mode'], string> = { equal: '均攤', items: '各點各的', mains: '主餐+共享' }
 
@@ -68,7 +72,7 @@ export default function Home() {
     return sum
   }, [projects, base, me])
 
-  const groups = useStore((s) => s.data.groups ?? [])
+  const groups = useStore((s) => s.data.groups ?? NO_GROUPS)
   const [pick, setPick] = useState(false)
   const create = (groupId?: string) => {
     setPick(false)
