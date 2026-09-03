@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="120" fill="#FFF7F0"/>
+  <defs><clipPath id="c"><path d="M256 96 C 376 96, 448 200, 448 296 C 448 400, 368 456, 256 456 C 144 456, 64 400, 64 296 C 64 200, 136 96, 256 96 Z"/></clipPath></defs>
+  <g clip-path="url(#c)">
+    <rect x="0" y="0" width="256" height="512" fill="#FFB3C6"/>
+    <rect x="256" y="0" width="256" height="512" fill="#B9EDD8"/>
+  </g>
+  <path d="M256 96 C 376 96, 448 200, 448 296 C 448 400, 368 456, 256 456 C 144 456, 64 400, 64 296 C 64 200, 136 96, 256 96 Z" fill="none" stroke="#3B2E2A" stroke-width="16"/>
+  <circle cx="200" cy="280" r="16" fill="#3B2E2A"/>
+  <circle cx="312" cy="280" r="16" fill="#3B2E2A"/>
+  <path d="M224 340 q32 32 64 0" stroke="#3B2E2A" stroke-width="14" fill="none" stroke-linecap="round"/>
+  <circle cx="150" cy="330" r="22" fill="#FF9EB5" opacity="0.8"/>
+  <circle cx="362" cy="330" r="22" fill="#FF9EB5" opacity="0.8"/>
+  <path d="M256 96 v-26" stroke="#3B2E2A" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="256" cy="58" r="18" fill="#FFE9A8" stroke="#3B2E2A" stroke-width="12"/>
+</svg>
