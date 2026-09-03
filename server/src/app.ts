@@ -2,6 +2,8 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { createHash, randomBytes } from 'node:crypto'
 import type { Db } from './db.ts'
+import { readFileSync, statSync } from 'node:fs'
+import { renderOg } from './og.ts'
 
 export interface AppOptions {
   db: Db
@@ -13,6 +15,12 @@ export interface AppOptions {
   inactiveDays?: number
   /** Web Push sender. Unset = push endpoints return 404. */
   push?: PushSender
+  /** Absolute origin for og:image / og:url, e.g. https://spilt.chung.men */
+  publicOrigin?: string
+  /** Path to the built share page (dist/s/index.html); OG tags get injected into it for /s/:id. */
+  shareHtml?: string
+  /** Test hook: replace the PNG renderer. */
+  renderOgImage?: (i: { title: string; subtitle: string; mood?: 'happy' | 'wow' | 'sleepy' }) => Promise<Buffer>
 }
 
 export interface PushSubscriptionRow {
@@ -34,6 +42,17 @@ const ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 const RATE_LIMITED = Symbol('rate_limited')
 const NOTE_MAX = 2000 // encrypted JSON, so a bit more than the 200-char plaintext
 const LABEL_MAX = 40
+const OG_TITLE_MAX = 60
+const OG_DESC = '點開看自己的份，轉完按「我轉了」就好 💸'
+
+function escHtml(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+function cleanOgTitle(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const t = v.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, OG_TITLE_MAX)
+  return t || null
+}
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
@@ -60,7 +79,7 @@ function makeLimiter(limit: number, windowMs: number, now: () => number) {
 
 type Vars = { accountId: string }
 
-export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push }: AppOptions) {
+export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg }: AppOptions) {
   const app = new Hono<{ Variables: Vars }>()
   const q = {
     accountByHash: db.raw.prepare('SELECT id FROM accounts WHERE token_hash = ?'),
@@ -73,9 +92,10 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     ),
     sharesByAccount: db.raw.prepare('SELECT id, project_id, expires_at, updated_at FROM shares WHERE account_id = ?'),
     shareByProject: db.raw.prepare('SELECT id FROM shares WHERE account_id = ? AND project_id = ?'),
-    insertShare: db.raw.prepare('INSERT INTO shares (id, account_id, project_id, cipher, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+    insertShare: db.raw.prepare('INSERT INTO shares (id, account_id, project_id, cipher, expires_at, created_at, updated_at, og_title) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
     updateShare: db.raw.prepare('UPDATE shares SET cipher = ?, expires_at = ?, updated_at = ? WHERE id = ?'),
-    shareById: db.raw.prepare('SELECT id, account_id, cipher, expires_at FROM shares WHERE id = ?'),
+    updateOgTitle: db.raw.prepare('UPDATE shares SET og_title = ? WHERE id = ?'),
+    shareById: db.raw.prepare('SELECT id, account_id, cipher, expires_at, og_title, updated_at FROM shares WHERE id = ?'),
     deleteShare: db.raw.prepare('DELETE FROM shares WHERE id = ? AND account_id = ?'),
     paidPersons: db.raw.prepare(
       "SELECT person_id, kind FROM share_events WHERE share_id = ? AND id IN (SELECT MAX(id) FROM share_events WHERE share_id = ? GROUP BY person_id)",
@@ -198,13 +218,16 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const t = now()
     const expiresAt = Math.min(body.expiresAt, t + SHARE_MAX_DAYS * 86_400_000)
     if (expiresAt <= t) return c.json({ error: 'bad_request', reason: 'expired' }, 400)
+    const hasOg = 'ogTitle' in body
+    const ogTitle = cleanOgTitle(body.ogTitle)
     const existing = q.shareByProject.get(accountId, body.projectId) as { id: string } | undefined
     if (existing) {
       q.updateShare.run(body.cipher, expiresAt, t, existing.id)
+      if (hasOg) q.updateOgTitle.run(ogTitle, existing.id)
       return c.json({ id: existing.id, expiresAt })
     }
     const id = newId(9)
-    q.insertShare.run(id, accountId, body.projectId, body.cipher, expiresAt, t, t)
+    q.insertShare.run(id, accountId, body.projectId, body.cipher, expiresAt, t, t, ogTitle)
     return c.json({ id, expiresAt })
   })
 
@@ -234,6 +257,61 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     if (row.expires_at < now()) return c.json({ error: 'expired' }, 410)
     const paid = (q.paidPersons.all(id, id) as { person_id: string; kind: string }[]).filter((e) => e.kind === 'paid').map((e) => e.person_id)
     return c.json({ cipher: row.cipher, expiresAt: row.expires_at, paid })
+  })
+
+  // --- Open Graph: preview image + share page HTML with meta tags (crawlers never see the #key) ---
+  app.get('/api/share/:id/og.png', async (c) => {
+    if (!publicLimiter(clientIp(c.req.raw.headers))) return c.json({ error: 'rate_limited' }, 429)
+    const id = c.req.param('id')
+    const row = ID_RE.test(id) ? (q.shareById.get(id) as { og_title: string | null; expires_at: number } | undefined) : undefined
+    const expired = !row || row.expires_at < now()
+    const title = expired ? (row ? '這個分帳連結過期了' : '找不到這個分帳') : (row.og_title ?? '有人幫你先付了')
+    const subtitle = expired ? '請對方再分享一次' : '朋友幫大家先墊了，來看看你的份'
+    try {
+      const png = await renderOgImage({ title, subtitle, mood: expired ? 'sleepy' : 'wow' })
+      return c.body(new Uint8Array(png), 200, { 'content-type': 'image/png', 'cache-control': 'public, max-age=600' })
+    } catch (e) {
+      console.error('og render failed', e)
+      return c.json({ error: 'server_error' }, 500)
+    }
+  })
+
+  let tpl: { html: string; mtime: number } | null = null
+  const loadShareHtml = () => {
+    if (!shareHtml) return null
+    try {
+      const m = statSync(shareHtml).mtimeMs
+      if (!tpl || tpl.mtime !== m) tpl = { html: readFileSync(shareHtml, 'utf8'), mtime: m }
+      return tpl.html
+    } catch {
+      return null
+    }
+  }
+  app.get('/s/:id', (c) => {
+    const id = c.req.param('id')
+    const html = loadShareHtml()
+    if (!html) return c.json({ error: 'not_found' }, 404)
+    const row = ID_RE.test(id) ? (q.shareById.get(id) as { og_title: string | null; expires_at: number; updated_at: number } | undefined) : undefined
+    const expired = !row || row.expires_at < now()
+    const title = expired ? (row ? '分帳連結過期了' : '找不到這個分帳') : (row.og_title ?? '有人幫你先付了 💸')
+    const desc = expired ? '請對方再分享一次新的連結。' : OG_DESC
+    const img = `${publicOrigin}/api/share/${encodeURIComponent(id)}/og.png?v=${row?.updated_at ?? 0}`
+    const url = `${publicOrigin}/s/${encodeURIComponent(id)}`
+    const meta = [
+      `<title>${escHtml(title)} · 반반 BanBan</title>`,
+      `<meta property="og:type" content="website">`,
+      `<meta property="og:site_name" content="반반 BanBan 半半分帳">`,
+      `<meta property="og:title" content="${escHtml(title)}">`,
+      `<meta property="og:description" content="${escHtml(desc)}">`,
+      `<meta property="og:image" content="${escHtml(img)}">`,
+      `<meta property="og:image:width" content="1200">`,
+      `<meta property="og:image:height" content="630">`,
+      `<meta property="og:url" content="${escHtml(url)}">`,
+      `<meta name="twitter:card" content="summary_large_image">`,
+      `<meta name="description" content="${escHtml(desc)}">`,
+    ].join('\n    ')
+    const out = html.replace(/<title>[^<]*<\/title>/, '').replace('</head>', `    ${meta}\n  </head>`)
+    return c.html(out, 200, { 'cache-control': 'no-cache', 'x-robots-tag': 'noindex' })
   })
 
   app.post('/api/share/:id/paid', async (c) => {

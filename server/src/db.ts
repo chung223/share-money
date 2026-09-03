@@ -54,6 +54,7 @@ CREATE INDEX IF NOT EXISTS push_subs_account ON push_subs(account_id);
 const MIGRATIONS: [table: string, column: string, ddl: string][] = [
   ['share_events', 'note', 'ALTER TABLE share_events ADD COLUMN note TEXT'],
   ['share_events', 'label', 'ALTER TABLE share_events ADD COLUMN label TEXT'],
+  ['shares', 'og_title', 'ALTER TABLE shares ADD COLUMN og_title TEXT'],
 ]
 
 export function openDb(file: string): Db {

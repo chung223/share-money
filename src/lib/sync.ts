@@ -154,7 +154,7 @@ export const api = {
     if (!ids.length) return
     await req(base, '/api/share/ack', { method: 'POST', token, json: { ids } })
   },
-  async share(base: string, token: string, body: { projectId: Id; cipher: string; expiresAt: number }): Promise<{ id: string; expiresAt: number }> {
+  async share(base: string, token: string, body: { projectId: Id; cipher: string; expiresAt: number; ogTitle?: string | null }): Promise<{ id: string; expiresAt: number }> {
     const r = await req(base, '/api/share', { method: 'POST', token, json: body })
     if (!r.ok) throw new SyncError('server', `HTTP ${r.status}`)
     return r.json()

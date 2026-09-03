@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { openDb } from './db.ts'
+import { writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createApp } from './app.ts'
 
 const T0 = 1_700_000_000_000
@@ -15,7 +18,12 @@ function setup(t0 = T0) {
       return !dead.has(sub.endpoint)
     },
   }
-  const { app, purgeExpired, purgeInactive } = createApp({ db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30, push })
+  const shareHtml = join(tmpdir(), `banban-share-${process.pid}.html`)
+  writeFileSync(shareHtml, '<!doctype html><html><head><meta charset="utf-8"><title>x</title></head><body><div id="root"></div></body></html>')
+  const { app, purgeExpired, purgeInactive } = createApp({
+    db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30, push, publicOrigin: 'https://example.test', shareHtml,
+    renderOgImage: async (i) => Buffer.from('PNG:' + i.title),
+  })
   const call = (path: string, init: RequestInit = {}, token?: string, ip = '1.2.3.4') =>
     app.request(path, { ...init, headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
   return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead }
@@ -163,5 +171,31 @@ describe('notes + push', () => {
     await call('/api/push/subscribe', post({ endpoint: 'https://push.example/xyz', keys: { p256dh: 'k', auth: 'a' } }), A)
     await call('/api/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint: 'https://push.example/xyz' }) }, A)
     expect((await body(call('/api/sync', {}, A))).push).toEqual({ enabled: false })
+  })
+})
+
+describe('open graph', () => {
+  it('injects escaped og tags into the share html and serves a preview image', async () => {
+    const { call, tick } = setup()
+    const { id } = await body(call('/api/share', post({ projectId: 'p1', cipher: 'enc', expiresAt: T0 + 86_400_000, ogTitle: '拉麵聚 <b>4 人</b>' }), A))
+    let html = await (await call(`/s/${id}`)).text()
+    expect(html).toContain('og:title" content="拉麵聚 &lt;b&gt;4 人&lt;/b&gt;"')
+    expect(html).toContain(`og:image" content="https://example.test/api/share/${id}/og.png?v=`)
+    expect(html).not.toContain('<title>x</title>')
+    expect(html).toContain('<div id="root"></div>')
+    const png = await call(`/api/share/${id}/og.png`)
+    expect(png.headers.get('content-type')).toBe('image/png')
+    expect(await png.text()).toBe('PNG:拉麵聚 <b>4 人</b>')
+    // hide the title: null clears it; omitted keeps it
+    await call('/api/share', post({ projectId: 'p1', cipher: 'enc', expiresAt: T0 + 86_400_000 }), A)
+    expect(await (await call(`/s/${id}`)).text()).toContain('拉麵聚')
+    await call('/api/share', post({ projectId: 'p1', cipher: 'enc', expiresAt: T0 + 86_400_000, ogTitle: null }), A)
+    html = await (await call(`/s/${id}`)).text()
+    expect(html).toContain('og:title" content="有人幫你先付了 💸"')
+    // unknown / expired still render the page (the app shows the error state) with a neutral title
+    expect(await (await call('/s/nope')).text()).toContain('找不到這個分帳')
+    tick(3 * 86_400_000)
+    expect(await (await call(`/s/${id}`)).text()).toContain('分帳連結過期了')
+    expect(await (await call(`/api/share/${id}/og.png`)).text()).toBe('PNG:這個分帳連結過期了')
   })
 })

@@ -68,3 +68,8 @@ export const SHARE_DURATIONS: { days: number; label: string }[] = [
   { days: 30, label: '30 天' },
   { days: 90, label: '90 天' },
 ]
+
+/** Default preview title: category emoji + name + headcount. No amounts, ever. */
+export function defaultOgTitle(p: Project, unnamed: string) {
+  return `${p.emoji} ${p.name || unnamed} · ${p.people.length} 人`
+}

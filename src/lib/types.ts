@@ -85,6 +85,8 @@ export interface ProjectShare {
   expiresAt: number
   /** project.updatedAt at the time the snapshot was uploaded; older than updatedAt = needs re-upload. */
   uploadedAt: number
+  /** Plaintext title for LINE/FB link previews (the only unencrypted thing about a share). null = hidden. */
+  ogTitle?: string | null
 }
 
 /** How friends can pay you back. Shown on the share page and in reminder messages. */
