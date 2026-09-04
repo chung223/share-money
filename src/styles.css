@@ -1776,9 +1776,19 @@ button.avatar:active {
   position: relative;
   display: inline-flex;
   flex-direction: column;
+  width: 96px; /* 跟原本的 .input--money 一樣：金額欄固定寬，品名欄才有空間 */
+  flex: 0 0 auto;
+}
+.money-wrap.grow {
+  width: auto;
+  flex: 1 1 auto;
+}
+.money-wrap--wide {
+  width: 120px;
 }
 .money-wrap .input--money {
   width: 100%;
+  min-width: 0;
 }
 .input--expr {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

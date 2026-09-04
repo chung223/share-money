@@ -143,9 +143,9 @@ export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, clas
   const isExpr = looksLikeExpression(text)
   const preview = isExpr ? evalMoney(text) : null
   return (
-    <span className={`money-wrap ${/\bgrow\b/.test(className) ? 'grow' : ''}`}>
+    <span className={`money-wrap ${/\bgrow\b/.test(className) ? 'grow' : ''} ${/\binput--qty\b/.test(className) ? 'money-wrap--wide' : ''}`}>
       <input
-        className={`input input--money ${className.replace(/\bgrow\b/, '')} ${isExpr ? 'input--expr' : ''}`}
+        className={`input input--money ${className.replace(/\b(grow|input--qty)\b/g, '')} ${isExpr ? 'input--expr' : ''}`}
         inputMode="decimal"
         placeholder={placeholder}
         autoFocus={autoFocus}
