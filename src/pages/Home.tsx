@@ -101,8 +101,7 @@ export default function Home() {
       setInbox(true)
       history.replaceState(null, '', '#/')
     } else if (h.startsWith('#/balances')) {
-      setBalances(true)
-      history.replaceState(null, '', '#/')
+      navigate('/friends', true)
     }
   }, [])
   const ai = useAiAvailable()
@@ -132,6 +131,9 @@ export default function Home() {
               🔒
             </button>
           )}
+          <button type="button" className="icon-btn" title="朋友" onClick={() => navigate('/friends')}>
+            👥
+          </button>
           <button type="button" className="icon-btn" title="設定" onClick={() => navigate('/settings')}>
             ⚙️
           </button>
@@ -139,9 +141,9 @@ export default function Home() {
       </header>
 
       {projects.length > 0 && (
-        <button type="button" className="hero-stat card card--pink" onClick={() => setBalances(true)}>
+        <button type="button" className="hero-stat card card--pink" onClick={() => navigate('/friends')}>
           <div>
-            <div className="hero-stat__label">還沒收回來的錢 · 點我看誰欠多少</div>
+            <div className="hero-stat__label">還沒收回來的錢 · 點我看每個人</div>
             <div className="hero-stat__value">{fmtMoney(totalOwed, base)}</div>
           </div>
           <div className="hero-stat__emoji">{totalOwed > 0 ? '🥺' : '🎉'}</div>

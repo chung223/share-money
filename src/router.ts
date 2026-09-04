@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 
-export type Route = { name: 'home' } | { name: 'project'; id: string; tab?: 'items' | 'result' } | { name: 'settings' } | { name: 'trip'; id: string } | { name: 'join'; id: string; key: string }
+export type Route = { name: 'home' } | { name: 'project'; id: string; tab?: 'items' | 'result' } | { name: 'settings' } | { name: 'trip'; id: string } | { name: 'join'; id: string; key: string } | { name: 'friends' }
 
 function parse(hash: string): Route {
   const h = hash.replace(/^#/, '')
   const m = /^\/p\/([^/]+)(?:\/(items|result))?/.exec(h)
   if (m) return { name: 'project', id: m[1], tab: (m[2] as 'items' | 'result') ?? 'items' }
   if (h.startsWith('/settings')) return { name: 'settings' }
+  if (h.startsWith('/friends')) return { name: 'friends' }
   const j = /^\/join\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)/.exec(h)
   if (j) return { name: 'join', id: j[1], key: j[2] }
   const t = /^\/t\/([^/]+)/.exec(h)

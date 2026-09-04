@@ -8,6 +8,7 @@ import SettingsPage from './pages/SettingsPage'
 import Onboarding from './pages/Onboarding'
 import TripPage from './pages/TripPage'
 import JoinTripPage from './pages/JoinTripPage'
+import FriendsPage from './pages/FriendsPage'
 import { Mascot } from './components/ui'
 import UpdateBanner from './components/UpdateBanner'
 
@@ -100,6 +101,7 @@ export default function App() {
   if (route.name === 'project') page = <ProjectPage id={route.id} tab={route.tab ?? 'items'} />
   else if (route.name === 'settings') page = <SettingsPage />
   else if (route.name === 'trip') page = <TripPage id={route.id} />
+  else if (route.name === 'friends') page = <FriendsPage />
   else if (route.name === 'join') page = <JoinTripPage id={route.id} secret={route.key} />
   else page = <Home />
 
