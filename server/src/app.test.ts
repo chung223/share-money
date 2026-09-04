@@ -450,3 +450,80 @@ describe('meme', () => {
     expect((await call('/api/meme/nope.png')).status).toBe(404)
   })
 })
+
+describe('LINE level 2: mirror, queries, commands, utilities', () => {
+  const sig = (body: string) => createHmac('sha256', 'secret').update(body).digest('base64')
+  const hook = (call: ReturnType<typeof setup>['call'], events: unknown[]) => {
+    const body = JSON.stringify({ destination: 'x', events })
+    return call('/api/line/webhook', { method: 'POST', body, headers: { 'x-line-signature': sig(body) } })
+  }
+  const say = async (call: ReturnType<typeof setup>['call'], text: string, tok = 'r') => {
+    await hook(call, [{ type: 'message', replyToken: tok, source: { type: 'user', userId: 'U1' }, message: { type: 'text', id: 't', text } }])
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  const mirror = {
+    v: 1, me: { id: 'me', name: '阿賴' }, baseCurrency: 'TWD', payLines: ['808 123456'],
+    projects: [
+      { id: 'p1', name: '拉麵聚', emoji: '🍜', date: '2026-09-03', category: 'food', currency: 'TWD', total: 900, baseTotal: null, tripId: 't1', payers: ['me'], people: [{ id: 'me', name: '阿賴', amount: 300 }, { id: 'ming', name: '小明', amount: 300 }, { id: 'hua', name: '小華', amount: 300 }], transfers: [{ from: 'ming', to: 'me', amount: 300, currency: 'TWD', remaining: 300, paid: 0, settled: false }, { from: 'hua', to: 'me', amount: 300, currency: 'TWD', remaining: 300, paid: 0, settled: true }] },
+      { id: 'p2', name: '計程車', emoji: '🚕', date: '2026-09-04', category: 'transport', currency: 'TWD', total: 300, baseTotal: null, tripId: 't1', payers: ['ming'], people: [{ id: 'me', name: '阿賴', amount: 150 }, { id: 'ming', name: '小明', amount: 150 }], transfers: [{ from: 'me', to: 'ming', amount: 150, currency: 'TWD', remaining: 150, paid: 0, settled: false }] },
+    ],
+    trips: [{ id: 't1', name: '沖繩', emoji: '🧳' }],
+  }
+  it('mirror gate, queries by name, commands enqueue/undo, utilities', async () => {
+    const { call, lineOut } = setup()
+    const { code } = await body(call('/api/line/link-code', post({}), A))
+    await say(call, `連結 ${code}`)
+    expect((await call('/api/line/mirror', { method: 'POST', body: JSON.stringify(mirror) }, A)).status).toBe(400) // not enabled
+    await say(call, '最近帳本')
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('等級 2')
+    await call('/api/line/settings', post({ mirrorEnabled: true }), A)
+    expect((await body(call('/api/line/status', {}, A)))).toMatchObject({ mirrorEnabled: true, summaryEnabled: true })
+    expect((await body(call('/api/line/mirror', { method: 'POST', body: JSON.stringify(mirror) }, A))).projects).toBe(2)
+    await say(call, '最近帳本')
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('carousel')
+    await say(call, '拉麵聚')
+    let out = JSON.stringify(lineOut.at(-1)!.body)
+    expect(out).toContain('拉麵聚')
+    expect(out).toContain('/#/p/p1/result')
+    await say(call, '小明')
+    out = JSON.stringify(lineOut.at(-1)!.body)
+    expect(out).toContain('還欠你 NT$150') // 300 owed minus 150 I owe
+    await say(call, '沖繩')
+    out = JSON.stringify(lineOut.at(-1)!.body)
+    expect(out).toContain('最少轉帳')
+    expect(out).toContain('小明 → 阿賴')
+    await say(call, '催 小明')
+    out = JSON.stringify(lineOut.at(-1)!.body)
+    expect(out).toContain('808 123456')
+    // commands
+    await say(call, '小明還了 100')
+    let s = await body(call('/api/sync', {}, A))
+    expect(s.lineCommands).toHaveLength(1)
+    expect(s.lineCommands[0]).toMatchObject({ type: 'settle', personId: 'ming', amount: 100, projectId: 'p1' })
+    const undoId = s.lineCommands[0].id
+    await hook(call, [{ type: 'postback', replyToken: 'r', source: { type: 'user', userId: 'U1' }, postback: { data: `undo:${undoId}` } }])
+    await new Promise((r) => setTimeout(r, 20))
+    expect((await body(call('/api/sync', {}, A))).lineCommands).toEqual([])
+    await say(call, '拉麵聚 加 阿花')
+    await say(call, '刪除 計程車')
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('confirm:del:p2')
+    await hook(call, [{ type: 'postback', replyToken: 'r', source: { type: 'user', userId: 'U1' }, postback: { data: 'confirm:del:p2' } }])
+    await new Promise((r) => setTimeout(r, 20))
+    s = await body(call('/api/sync', {}, A))
+    expect(s.lineCommands.map((c: { type: string }) => c.type)).toEqual(['addPerson', 'deleteProject'])
+    await call('/api/line/ack-commands', post({ ids: s.lineCommands.map((c: { id: number }) => c.id) }), A)
+    expect((await body(call('/api/sync', {}, A))).lineCommands).toEqual([])
+    await say(call, '路人甲還了')
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('找不到')
+    // utilities work without mirror too
+    await say(call, '900 除 4')
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('每人 225')
+    // unknown text still becomes a draft
+    await say(call, '昨天跟大家吃火鍋 2000 我付的')
+    expect((await body(call('/api/sync', {}, A))).lineDrafts).toHaveLength(1)
+    // turning mirror off wipes it
+    await call('/api/line/settings', post({ mirrorEnabled: false }), A)
+    await say(call, '最近帳本')
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('等級 2')
+  })
+})

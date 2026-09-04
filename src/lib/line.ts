@@ -9,6 +9,7 @@ export interface LineStatus {
   pushEnabled: boolean
   summaryEnabled: boolean
   weeklyEnabled: boolean
+  mirrorEnabled: boolean
   pending: number
 }
 export interface LineDraft {
@@ -50,7 +51,7 @@ export const lineApi = {
     const a = await authed()
     await api.raw(a.base, '/api/line/push', { method: 'POST', token: a.token, json: { enabled } })
   },
-  async settings(patch: { pushEnabled?: boolean; summaryEnabled?: boolean; weeklyEnabled?: boolean }) {
+  async settings(patch: { pushEnabled?: boolean; summaryEnabled?: boolean; weeklyEnabled?: boolean; mirrorEnabled?: boolean }) {
     const a = await authed()
     await j(await api.raw(a.base, '/api/line/settings', { method: 'POST', token: a.token, json: patch }))
   },
@@ -59,6 +60,16 @@ export const lineApi = {
     const a = await authed()
     const r = await api.raw(a.base, '/api/line/summary', { method: 'POST', token: a.token, json: { items, currency } })
     return r.ok
+  },
+  async mirror(payload: unknown) {
+    const a = await authed()
+    const r = await api.raw(a.base, '/api/line/mirror', { method: 'POST', token: a.token, json: payload })
+    return r.ok
+  },
+  async ackCommands(ids: number[]) {
+    if (!ids.length) return
+    const a = await authed()
+    await api.raw(a.base, '/api/line/ack-commands', { method: 'POST', token: a.token, json: { ids } })
   },
   async meme(o: { name: string; amountText: string; mood: 'cute' | 'angry' | 'sad' | 'party'; line?: string }): Promise<{ id: string; url: string }> {
     const a = await authed()

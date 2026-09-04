@@ -7,6 +7,7 @@ import { renderOg } from './og.ts'
 import type { AiParser } from './ai.ts'
 import { LINE_HELP, type LineClient } from './line.ts'
 import { composeMeme, memePrompt, memeStore, MEME_LINES, type ImageGen, type Mood } from './meme.ts'
+import { CMD_HELP, findPerson, findProject, findTrip, parseCommand, personFlex, projectFlex, recentFlex, reminderTextFor, sanitizeMirror, tripFlex, utility, type LineCommand, type Mirror } from './lineMirror.ts'
 import { HELP_QR, inboxText, quickReply, receiptFlex, summaryFlex, textDraftReply, textMsg, weeklyText, type Summary } from './lineMessages.ts'
 import { callChat, callProvider, isPublicHttpsUrl, type AiFormat } from '../../src/lib/receiptAi.ts'
 
@@ -143,9 +144,18 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     tripDelete: db.raw.prepare('DELETE FROM trips WHERE id = ?'),
     tripPurge: db.raw.prepare('DELETE FROM trips WHERE last_seen_at < ?'),
     tripCount: db.raw.prepare('SELECT COUNT(*) AS n FROM trips'),
-    lineByUser: db.raw.prepare('SELECT account_id, display_name, push_enabled, summary_enabled FROM line_links WHERE line_user_id = ?'),
-    lineByAccount: db.raw.prepare('SELECT line_user_id, display_name, push_enabled, summary_enabled, weekly_enabled, created_at FROM line_links WHERE account_id = ?'),
-    lineSetSettings: db.raw.prepare('UPDATE line_links SET push_enabled = ?, summary_enabled = ?, weekly_enabled = ? WHERE account_id = ?'),
+    lineByUser: db.raw.prepare('SELECT account_id, display_name, push_enabled, summary_enabled, mirror_enabled FROM line_links WHERE line_user_id = ?'),
+    lineByAccount: db.raw.prepare('SELECT line_user_id, display_name, push_enabled, summary_enabled, weekly_enabled, mirror_enabled, created_at FROM line_links WHERE account_id = ?'),
+    lineSetSettings: db.raw.prepare('UPDATE line_links SET push_enabled = ?, summary_enabled = ?, weekly_enabled = ?, mirror_enabled = ? WHERE account_id = ?'),
+    lineMirrorPut: db.raw.prepare('INSERT INTO line_mirrors (account_id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at'),
+    lineMirrorGet: db.raw.prepare('SELECT payload FROM line_mirrors WHERE account_id = ?'),
+    lineMirrorDelete: db.raw.prepare('DELETE FROM line_mirrors WHERE account_id = ?'),
+    lineCmdInsert: db.raw.prepare('INSERT INTO line_commands (account_id, payload, created_at) VALUES (?, ?, ?)'),
+    lineCmdLast: db.raw.prepare('SELECT id FROM line_commands WHERE account_id = ? ORDER BY id DESC LIMIT 1'),
+    lineCmdPending: db.raw.prepare('SELECT id, payload, created_at FROM line_commands WHERE account_id = ? AND consumed = 0 ORDER BY id LIMIT 50'),
+    lineCmdAck: db.raw.prepare('UPDATE line_commands SET consumed = 1 WHERE id = ? AND account_id = ?'),
+    lineCmdCancel: db.raw.prepare('DELETE FROM line_commands WHERE id = ? AND account_id = ? AND consumed = 0'),
+    lineCmdPurge: db.raw.prepare('DELETE FROM line_commands WHERE consumed = 1 OR created_at < ?'),
     lineSummaryPut: db.raw.prepare('INSERT INTO line_summaries (account_id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at'),
     lineSummaryGet: db.raw.prepare('SELECT payload, updated_at FROM line_summaries WHERE account_id = ?'),
     lineSummaryDelete: db.raw.prepare('DELETE FROM line_summaries WHERE account_id = ?'),
@@ -250,6 +260,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
       events: events.map((e) => ({ id: e.id, shareId: e.share_id, projectId: e.project_id, personId: e.person_id, kind: e.kind, createdAt: e.created_at, note: e.note, label: e.label })),
       push: push ? { enabled: (q.subsByAccount.all(accountId) as unknown[]).length > 0 } : null,
       lineDrafts: line?.enabled ? (q.lineDraftsPending.all(accountId) as { id: number; kind: string; payload: string; created_at: number }[]).map((d) => ({ id: d.id, kind: d.kind, payload: JSON.parse(d.payload), createdAt: d.created_at })) : [],
+      lineCommands: line?.enabled ? (q.lineCmdPending.all(accountId) as { id: number; payload: string; created_at: number }[]).map((d) => ({ id: d.id, ...(JSON.parse(d.payload) as LineCommand), createdAt: d.created_at })) : [],
       shares: shares.map((s) => ({ id: s.id, projectId: s.project_id, expiresAt: s.expires_at, updatedAt: s.updated_at })),
     })
   })
@@ -650,8 +661,8 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
   app.get('/api/line/status', (c) => {
     const accountId = requireAuth(c)
     if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
-    const l = q.lineByAccount.get(accountId) as { line_user_id: string; display_name: string | null; push_enabled: number; summary_enabled: number; weekly_enabled: number; created_at: number } | undefined
-    return c.json({ available: !!line?.enabled, linked: !!l, displayName: l?.display_name ?? null, pushEnabled: !!l?.push_enabled, summaryEnabled: !!l?.summary_enabled, weeklyEnabled: !!l?.weekly_enabled, pending: (q.lineDraftCount.get(accountId) as { n: number }).n })
+    const l = q.lineByAccount.get(accountId) as { line_user_id: string; display_name: string | null; push_enabled: number; summary_enabled: number; weekly_enabled: number; mirror_enabled: number; created_at: number } | undefined
+    return c.json({ available: !!line?.enabled, linked: !!l, displayName: l?.display_name ?? null, pushEnabled: !!l?.push_enabled, summaryEnabled: !!l?.summary_enabled, weeklyEnabled: !!l?.weekly_enabled, mirrorEnabled: !!l?.mirror_enabled, pending: (q.lineDraftCount.get(accountId) as { n: number }).n })
   })
   app.post('/api/line/link-code', (c) => {
     if (!line?.enabled) return c.json({ error: 'line_disabled' }, 404)
@@ -682,12 +693,39 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const accountId = requireAuth(c)
     if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
     const body = await c.req.json().catch(() => null)
-    const l = q.lineByAccount.get(accountId) as { push_enabled: number; summary_enabled: number; weekly_enabled: number } | undefined
+    const l = q.lineByAccount.get(accountId) as { push_enabled: number; summary_enabled: number; weekly_enabled: number; mirror_enabled: number } | undefined
     if (!l) return c.json({ error: 'not_linked' }, 400)
     const pick = (k: string, cur: number) => (typeof body?.[k] === 'boolean' ? (body[k] ? 1 : 0) : cur)
-    const summary = pick('summaryEnabled', l.summary_enabled)
-    q.lineSetSettings.run(pick('pushEnabled', l.push_enabled), summary, summary ? pick('weeklyEnabled', l.weekly_enabled) : 0, accountId)
+    const mirror = pick('mirrorEnabled', l.mirror_enabled)
+    const summary = mirror ? 1 : pick('summaryEnabled', l.summary_enabled) // 等級 2 包含等級 1
+    q.lineSetSettings.run(pick('pushEnabled', l.push_enabled), summary, summary ? pick('weeklyEnabled', l.weekly_enabled) : 0, mirror, accountId)
     if (!summary) q.lineSummaryDelete.run(accountId)
+    if (!mirror) q.lineMirrorDelete.run(accountId)
+    return c.json({ ok: true })
+  })
+  /** 等級 2：App 端上傳帳本結算鏡像（明文，不含品項與帳號）。 */
+  app.post('/api/line/mirror', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const l = q.lineByAccount.get(accountId) as { mirror_enabled: number } | undefined
+    if (!l?.mirror_enabled) return c.json({ error: 'mirror_disabled' }, 400)
+    const raw = await c.req.text()
+    if (raw.length > 1_000_000) return c.json({ error: 'too_large' }, 413)
+    let m: Mirror | null = null
+    try {
+      m = sanitizeMirror(JSON.parse(raw), now())
+    } catch {
+      /* bad json */
+    }
+    if (!m) return c.json({ error: 'bad_request' }, 400)
+    q.lineMirrorPut.run(accountId, JSON.stringify(m), now())
+    return c.json({ ok: true, projects: m.projects.length })
+  })
+  app.post('/api/line/ack-commands', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const body = await c.req.json().catch(() => null)
+    for (const id of Array.isArray(body?.ids) ? body.ids : []) if (Number.isInteger(id)) q.lineCmdAck.run(id, accountId)
     return c.json({ ok: true })
   })
   /** App 端上傳「誰欠我」明文摘要（使用者選擇性開啟）。 */
@@ -746,6 +784,20 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     }
   }
   const BOT_NAMES = /^\s*@?(?:반반|banban|半半)\s*/i
+  const mirrorOf = (accountId: string): Mirror | null => {
+    const row = q.lineMirrorGet.get(accountId) as { payload: string } | undefined
+    if (!row) return null
+    try {
+      return JSON.parse(row.payload) as Mirror
+    } catch {
+      return null
+    }
+  }
+  const enqueue = (accountId: string, cmd: LineCommand) => {
+    q.lineCmdInsert.run(accountId, JSON.stringify(cmd), now())
+    return (q.lineCmdLast.get(accountId) as { id: number }).id
+  }
+  const NEED_L2 = textMsg('這個要開「等級 2：帳本鏡像」才行。到 App 設定頁 → LINE 機器人 打開，bot 才看得到帳本結算（明文，不含品項與帳號）。', quickReply([{ label: '開 App', uri: 'https://spilt.chung.men/#/settings' }]))
   async function handleLineEvent(ev: LineEvent) {
     if (!line) return
     const userId = ev.source?.userId
@@ -754,7 +806,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     if (ev.type === 'follow' && ev.replyToken) return line.reply(ev.replyToken, [textMsg(LINE_HELP, HELP_QR)])
     if (ev.type === 'join' && ev.replyToken) return line.reply(ev.replyToken, [textMsg('大家好，我是 반반 分帳小幫手 🐥\n在群裡 @반반 加一句話或直接傳「반반 拉麵 900 我付」，我就把它記到你的 App 收件匣。要先私訊我「連結 XXXXXX」綁帳號喔！')])
     if (!ev.replyToken || !userId) return
-    const linked = q.lineByUser.get(userId) as { account_id: string; summary_enabled: number } | undefined
+    const linked = q.lineByUser.get(userId) as { account_id: string; summary_enabled: number; mirror_enabled: number } | undefined
     if (inGroup && chatId) {
       // 記住群裡互動過的人（免費），之後用來對名字
       line.getProfile(userId).then((p) => q.lineMemberSeen.run(chatId, userId, p?.displayName ?? null, now())).catch(() => {})
@@ -766,6 +818,35 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
       if (!linked) return line.reply(ev.replyToken, [textMsg('先私訊我「連結 XXXXXX」綁帳號（連結碼在 App 設定頁）。', HELP_QR)])
       if (data === 'inbox') return line.reply(ev.replyToken, [inboxText(pendingOf(linked.account_id), q.lineDraftsPending.all(linked.account_id) as { kind: string; payload: string }[])])
       if (data === 'balances') return line.reply(ev.replyToken, [summaryFlex(linked.summary_enabled ? summaryOf(linked.account_id) : null)])
+      const mir = linked.mirror_enabled ? mirrorOf(linked.account_id) : null
+      const pb = /^(p|remind|settle|confirm|undo):(.+)$/.exec(data)
+      if (pb) {
+        if (pb[1] === 'undo') {
+          q.lineCmdCancel.run(Number(pb[2]), linked.account_id)
+          return line.reply(ev.replyToken, [textMsg('取消了。', HELP_QR)])
+        }
+        if (!mir) return line.reply(ev.replyToken, [NEED_L2])
+        if (pb[1] === 'p') {
+          const p = mir.projects.find((x) => x.id === pb[2])
+          return line.reply(ev.replyToken, [p ? projectFlex(mir, p) : textMsg('找不到這本帳（可能已刪除）。')])
+        }
+        if (pb[1] === 'remind') {
+          const name = mir.projects.flatMap((p) => p.people).find((x) => x.id === pb[2])?.name
+          return line.reply(ev.replyToken, [textMsg(name ? reminderTextFor(mir, pb[2], name) : '找不到這個人。')])
+        }
+        if (pb[1] === 'settle') {
+          const name = mir.projects.flatMap((p) => p.people).find((x) => x.id === pb[2])?.name ?? '他'
+          const id = enqueue(linked.account_id, { type: 'settle', personId: pb[2], personName: name })
+          return line.reply(ev.replyToken, [textMsg(`已記錄 ${name} 全部還清，App 下次同步會更新。`, quickReply([{ label: '↩️ 取消', data: `undo:${id}` }, { label: '開 App', uri: 'https://spilt.chung.men' }]))])
+        }
+        if (pb[1] === 'confirm') {
+          const [kind, pid] = pb[2].split(':')
+          if (kind === 'del') {
+            const id = enqueue(linked.account_id, { type: 'deleteProject', projectId: pid })
+            return line.reply(ev.replyToken, [textMsg('好，App 下次同步就會刪掉。', quickReply([{ label: '↩️ 取消', data: `undo:${id}` }]))])
+          }
+        }
+      }
       const ack = /^ack:(\d+)$/.exec(data)
       if (ack) {
         q.lineDraftAck.run(Number(ack[1]), linked.account_id)
@@ -799,6 +880,34 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
       if (/^(help|說明|幫助|\?|？)$/i.test(text)) return line.reply(ev.replyToken, [textMsg(LINE_HELP, HELP_QR)])
       if (/^(收件匣|inbox)$/i.test(text)) return line.reply(ev.replyToken, [inboxText(pendingOf(linked.account_id), q.lineDraftsPending.all(linked.account_id) as { kind: string; payload: string }[])])
       if (/^(誰欠我|餘額|balances?)$/i.test(text)) return line.reply(ev.replyToken, [summaryFlex(linked.summary_enabled ? summaryOf(linked.account_id) : null)])
+      if (/^(指令|怎麼用|commands?)$/i.test(text)) return line.reply(ev.replyToken, [textMsg(CMD_HELP, HELP_QR)])
+      // 小工具（不需要鏡像）
+      const util = await utility(text)
+      if (util) return line.reply(ev.replyToken, [util])
+      // 等級 2：查詢與指令
+      const mir = linked.mirror_enabled ? mirrorOf(linked.account_id) : null
+      if (mir) {
+        if (/^(最近帳本|最近|帳本|recent)$/i.test(text)) return line.reply(ev.replyToken, [recentFlex(mir)])
+        const cmd = parseCommand(mir, text)
+        if (cmd) {
+          if ('error' in cmd) return line.reply(ev.replyToken, [textMsg(cmd.error, HELP_QR)])
+          if (cmd.confirm && cmd.cmd.type === 'deleteProject') return line.reply(ev.replyToken, [textMsg(cmd.reply, quickReply([{ label: '🗑 確定刪除', data: `confirm:del:${cmd.cmd.projectId}` }, { label: '算了', text: '算了' }]))])
+          const id = enqueue(linked.account_id, cmd.cmd)
+          return line.reply(ev.replyToken, [textMsg(cmd.reply, quickReply([{ label: '↩️ 取消', data: `undo:${id}` }, { label: '開 App', uri: 'https://spilt.chung.men' }]))])
+        }
+        const remind = /^(?:催|催款)\s*(.+)$/.exec(text)
+        if (remind) {
+          const f = findPerson(mir, remind[1])
+          return line.reply(ev.replyToken, [textMsg(f ? reminderTextFor(mir, f[0], f[1]) : `找不到叫「${remind[1]}」的人。`)])
+        }
+        if (/^算了$/.test(text)) return line.reply(ev.replyToken, [textMsg('好～', HELP_QR)])
+        const trip = findTrip(mir, text)
+        if (trip) return line.reply(ev.replyToken, [tripFlex(mir, trip)])
+        const proj = findProject(mir, text)
+        if (proj && text.length <= 30) return line.reply(ev.replyToken, [projectFlex(mir, proj)])
+        const person = findPerson(mir, text)
+        if (person && text.length <= 12) return line.reply(ev.replyToken, [personFlex(mir, person[0], person[1])])
+      } else if (!inGroup && /^(最近帳本|最近|帳本|recent)$/i.test(text)) return line.reply(ev.replyToken, [NEED_L2])
       if (pendingOf(linked.account_id) >= 50) return line.reply(ev.replyToken, [textMsg('收件匣滿了（50 筆），先到 App 處理一下吧。', HELP_QR)])
       q.lineDraftInsert.run(linked.account_id, 'text', JSON.stringify({ text: text.slice(0, 2000), group: inGroup ? chatId : undefined }), now(), inGroup ? 'group' : 'user')
       const id = (q.lineDraftLast.get(linked.account_id) as { id: number }).id
@@ -892,6 +1001,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const r = q.purgeInactive.run(now() - inactiveDays * 86_400_000)
     q.tripPurge.run(now() - inactiveDays * 86_400_000)
     q.lineDraftPurge.run(now() - 30 * 86_400_000)
+    q.lineCmdPurge.run(now() - 30 * 86_400_000)
     memes?.purge(7 * 86_400_000)
     return Number(r.changes)
   }

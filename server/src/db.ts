@@ -81,6 +81,19 @@ CREATE TABLE IF NOT EXISTS line_summaries (
   payload TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS line_mirrors (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  payload TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS line_commands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  consumed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS line_commands_account ON line_commands(account_id, consumed);
 CREATE TABLE IF NOT EXISTS line_group_members (
   group_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
@@ -114,6 +127,7 @@ const MIGRATIONS: [table: string, column: string, ddl: string][] = [
   ['line_links', 'weekly_enabled', 'ALTER TABLE line_links ADD COLUMN weekly_enabled INTEGER NOT NULL DEFAULT 0'],
   ['line_links', 'last_weekly_at', 'ALTER TABLE line_links ADD COLUMN last_weekly_at INTEGER NOT NULL DEFAULT 0'],
   ['line_drafts', 'origin', 'ALTER TABLE line_drafts ADD COLUMN origin TEXT'],
+  ['line_links', 'mirror_enabled', 'ALTER TABLE line_links ADD COLUMN mirror_enabled INTEGER NOT NULL DEFAULT 0'],
 ]
 
 export function openDb(file: string): Db {

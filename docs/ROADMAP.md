@@ -118,6 +118,12 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 - 選擇性「誰欠我」明文摘要同步 + 週一 09:00 提醒（Push）。
 - MiniMax image-01 催款梗圖（催款視窗「生一張催款梗圖」），sharp 疊名字／金額／一句話。
 
+## LINE 等級 2（2026-09-04 ✅）
+
+- 帳本鏡像（opt-in 明文）：bot 回「最近帳本」carousel、帳本結算卡、某人欠款卡（催款文字／他還了）、旅程最少轉帳卡。
+- 指令佇列：「小明還了」「小明還了 200」「拉麵聚 加小華」「刪除 拉麵聚」（確認）→ App 同步時執行；可「取消」。
+- 小工具：「900 除 3」、「日圓 2400」。
+
 ## 第三階段：智慧匯入
 
 - ✅ 2026-09-03 伺服器端 AI 收據辨識 `POST /api/parse`（`server/src/ai.ts`，MiniMax OpenAI 相容 API：文字 M2.5、圖片 M3；每帳號每日 `AI_DAILY_QUOTA` 次）。前端圖片／PDF／貼上文字都可切 AI；`src/lib/pdf.ts` 用 pdfjs 抽文字層或轉圖。

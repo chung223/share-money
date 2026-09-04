@@ -13,7 +13,10 @@ export default function LineSection() {
       .status()
       .then((v) => {
         setSt(v)
-        if (v) localStorage.setItem('banban:lineSummary', v.linked && v.summaryEnabled ? '1' : '0')
+        if (v) {
+          localStorage.setItem('banban:lineSummary', v.linked && v.summaryEnabled ? '1' : '0')
+          localStorage.setItem('banban:lineMirror', v.linked && v.mirrorEnabled ? '1' : '0')
+        }
       })
       .catch(() => setSt(null))
   useEffect(() => {
@@ -71,7 +74,27 @@ export default function LineSection() {
               每週一早上 9 點用 LINE 提醒我誰還沒還（一週一則推播）
             </label>
           )}
-          <p className="muted small">bot 底下有選單：📥 收件匣、💰 誰欠我、開 App、說明。群組裡也能用：把 bot 拉進群，打「반반 拉麵 900 我付」或 @它。</p>
+          <label className="row gap-s center small">
+            <input
+              type="checkbox"
+              checked={st.mirrorEnabled}
+              disabled={busy}
+              onChange={(e) =>
+                run(async () => {
+                  await lineApi.settings({ mirrorEnabled: e.target.checked })
+                  localStorage.setItem('banban:lineMirror', e.target.checked ? '1' : '0')
+                  if (e.target.checked) {
+                    localStorage.setItem('banban:lineSummary', '1')
+                    useStore.getState().syncNow({ quiet: true })
+                  }
+                })
+              }
+            />
+            <span>
+              <b>等級 2：帳本鏡像</b>（明文：帳本名稱、日期、每人金額、誰還了、旅程；不含品項、不含明細）。開了 bot 才能回「最近帳本」「拉麵聚」「小明」「沖繩」，並接受「小明還了」「拉麵聚 加小華」「刪除 拉麵聚」這類指令。
+            </span>
+          </label>
+          <p className="muted small">bot 底下有選單：📥 收件匣、💰 誰欠我、開 App、說明。群組裡也能用：把 bot 拉進群，打「반반 拉麵 900 我付」或 @它。傳「指令」給 bot 會列出它聽得懂的話。</p>
           <button type="button" className="btn btn--ghost btn--sm btn--danger-text center-self" disabled={busy} onClick={() => run(async () => { await lineApi.unlink(); localStorage.setItem('banban:lineSummary', '0') }, '已解除連結')}>
             解除連結
           </button>

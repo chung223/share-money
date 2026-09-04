@@ -630,6 +630,21 @@ export const useStore = create<State>((set, get) => ({
       set({ sync: { status: 'idle', lastSyncAt: meta.lastSyncAt, error: null, dirty: meta.dirty } })
       if (Array.isArray((remote as { lineDrafts?: unknown }).lineDrafts)) set({ lineDrafts: (remote as unknown as { lineDrafts: import('./lib/line').LineDraft[] }).lineDrafts })
       get().syncTrips().catch(() => {})
+      // LINE 指令（bot 那邊下的「小明還了」等）：先套用再上傳鏡像
+      const cmds = (remote as unknown as { lineCommands?: import('./lib/lineMirror').LineCommandIn[] }).lineCommands
+      if (cmds?.length) {
+        import('./lib/lineMirror').then(async ({ applyLineCommands }) => {
+          const r = { applied: 0, notes: [] as string[] }
+          get().update((d) => Object.assign(r, applyLineCommands(d, cmds, newPerson)))
+          const { lineApi } = await import('./lib/line')
+          await lineApi.ackCommands(cmds.map((c) => c.id))
+          if (r.notes.length) get().showToast(`LINE：${r.notes.join('；')}`, '💚')
+        }).catch(() => {})
+      }
+      // LINE 等級 2 鏡像（明文結算結果）
+      if (localStorage.getItem('banban:lineMirror') === '1') {
+        import('./lib/lineMirror').then(({ buildMirror }) => import('./lib/line').then(({ lineApi }) => lineApi.mirror(buildMirror(get().data)))).catch(() => {})
+      }
       // LINE 催款摘要（使用者選擇性開啟；旗標存 localStorage 免得每次多打一次 status）
       if (localStorage.getItem('banban:lineSummary') === '1') {
         import('./lib/balances').then(({ personBalances }) => {
