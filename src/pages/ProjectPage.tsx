@@ -12,6 +12,8 @@ import SettleSheet from '../components/SettleSheet'
 import { aiChat } from '../lib/ai'
 import { assignSystem, normaliseAssign } from '../lib/aiAssist'
 import { useAiAvailable } from '../components/useAiAvailable'
+import { isMobile, lineShareUrl } from '../lib/lineShare'
+import { shareUrl, defaultOgTitle } from '../lib/share'
 import { hasMultiPayer, transferKey, type PersonResult, type Transfer } from '../lib/split'
 import { CATEGORIES, categoryOf, emojiOptions, type CategoryMeta } from '../lib/category'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
@@ -738,6 +740,10 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
   const [open, setOpen] = useState<string | null>(null)
   const [confetti, setConfetti] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
+  const createShare = useStore((s) => s.createShare)
+  const [linkBusy, setLinkBusy] = useState(false)
+  const liveShare = p.share && p.share.expiresAt > Date.now() ? p.share : null
+  const lineText = liveShare ? `${liveShare.ogTitle ?? defaultOgTitle(p, categoryOf(p).unnamed)}\n看你的份、轉完按「我轉了」👉 ${shareUrl(liveShare.id, liveShare.key)}` : ''
   const [remind, setRemind] = useState<{ person: PersonResult; amount?: number; baseAmount?: number | null; amountText?: string } | null>(null)
   const [settle, setSettle] = useState<Transfer | null>(null)
   const foreign = p.currency !== base
@@ -933,8 +939,33 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
         </section>
       )}
 
+      {isMobile() &&
+        (liveShare ? (
+          <a className="btn btn--mint btn--lg" href={lineShareUrl(lineText)} target="_blank" rel="noreferrer">
+            💚 傳到 LINE 給大家（連結）
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="btn btn--mint btn--lg"
+            disabled={linkBusy}
+            onClick={async () => {
+              setLinkBusy(true)
+              try {
+                await createShare(p.id, 30, defaultOgTitle(p, categoryOf(p).unnamed))
+                showToast('連結好了，再按一次就會開 LINE', '💚')
+              } catch (e) {
+                showToast(e instanceof Error ? e.message : '失敗', '😵')
+              } finally {
+                setLinkBusy(false)
+              }
+            }}
+          >
+            {linkBusy ? '產生連結中…' : '💚 傳到 LINE 給大家'}
+          </button>
+        ))}
       <button type="button" className="btn btn--primary btn--lg" onClick={share}>
-        📤 分享結果
+        📤 分享結果（純文字）
       </button>
       <button type="button" className={`btn btn--lg ${p.share && p.share.expiresAt > Date.now() ? 'btn--mint' : 'btn--ghost'}`} onClick={() => setLinkOpen(true)}>
         🔗 {p.share && p.share.expiresAt > Date.now() ? '連結已開，朋友可以按「我轉了」' : '給朋友的連結'}

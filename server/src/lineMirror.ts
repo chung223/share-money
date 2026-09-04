@@ -23,6 +23,7 @@ export interface MirrorProject {
   total: number
   baseTotal: number | null
   tripId?: string
+  shareUrl?: string
   payers: string[]
   people: { id: string; name: string; amount: number }[]
   transfers: MirrorTransfer[]
@@ -76,6 +77,7 @@ export function sanitizeMirror(raw: unknown, now: number): Mirror | null {
     total: num(p.total),
     baseTotal: p.baseTotal == null ? null : num(p.baseTotal),
     tripId: p.tripId ? str(p.tripId, 64) : undefined,
+    shareUrl: typeof p.shareUrl === 'string' && /^https:\/\/spilt\.chung\.men\/s\/[A-Za-z0-9_-]+#[A-Za-z0-9_-]+$/.test(p.shareUrl) ? p.shareUrl : undefined,
     payers: Array.isArray(p.payers) ? p.payers.slice(0, 10).map((x) => str(x)) : [],
     people: Array.isArray(p.people) ? p.people.slice(0, 30).map((x) => ({ id: str(x?.id, 64), name: str(x?.name), amount: num(x?.amount) })) : [],
     transfers: Array.isArray(p.transfers) ? p.transfers.slice(0, 60).map((t) => ({ from: str(t?.from, 64), to: str(t?.to, 64), amount: num(t?.amount), currency: /^[A-Z]{3}$/.test(String(t?.currency)) ? String(t?.currency) : 'TWD', remaining: num(t?.remaining), paid: num(t?.paid), settled: !!t?.settled })) : [],
@@ -91,6 +93,8 @@ export function sanitizeMirror(raw: unknown, now: number): Mirror | null {
   }
 }
 
+/** LINE 官方分享網址：開「分享給好友」畫面，文字先填好 */
+export const lineShare = (text: string) => `https://line.me/R/share?text=${encodeURIComponent(text.slice(0, 900))}`
 export const money = (n: number, cur: string) => `${cur === 'TWD' ? 'NT$' : cur + ' '}${Math.round(n * 100) / 100 !== Math.round(n) ? n.toFixed(2) : Math.round(n).toLocaleString('zh-TW')}`
 
 function norm(s: string) {
@@ -140,7 +144,8 @@ export function projectFlex(m: Mirror, p: MirrorProject) {
         spacing: 'sm',
         contents: [
           { type: 'text', text: open.length ? `還有 ${open.length} 筆沒還` : '全部結清 🎉', size: 'xs', color: '#9a8b85', align: 'center' },
-          { type: 'button', style: 'primary', color: '#FF8FAB', height: 'sm', action: { type: 'uri', label: '在 App 打開', uri: `${APP_URL}/#/p/${p.id}/result` } },
+          ...(p.shareUrl ? [{ type: 'button', style: 'primary', color: '#06C755', height: 'sm', action: { type: 'uri', label: '💚 傳給 LINE 好友', uri: lineShare(`${p.emoji} ${p.name || ''}\n看你的份、轉完按「我轉了」👉 ${p.shareUrl}`) } }] : []),
+          { type: 'button', style: p.shareUrl ? 'secondary' : 'primary', color: p.shareUrl ? undefined : '#FF8FAB', height: 'sm', action: { type: 'uri', label: p.shareUrl ? '在 App 打開' : '在 App 打開（產生分享連結）', uri: `${APP_URL}/#/p/${p.id}/result` } },
         ],
       },
     },
@@ -192,7 +197,18 @@ export function personFlex(m: Mirror, personId: string, name: string) {
       size: 'kilo',
       header: { type: 'box', layout: 'vertical', backgroundColor: net > 0 ? '#FFB3C6' : '#B9EDD8', contents: [{ type: 'text', text: `👤 ${name}`, weight: 'bold', size: 'md' }, { type: 'text', text: net > 0 ? `還欠你 ${money(net, cur)}` : net < 0 ? `你欠他 ${money(-net, cur)}` : '互不相欠 🎉', size: 'sm' }] },
       body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: rows.length ? rows : [{ type: 'text', text: '沒有未結清的帳', size: 'sm', color: '#9a8b85' }] },
-      footer: net > 0 ? { type: 'box', layout: 'horizontal', spacing: 'sm', contents: [{ type: 'button', style: 'primary', color: '#FF8FAB', height: 'sm', action: { type: 'postback', label: '📣 催款文字', data: `remind:${personId}`, displayText: `催 ${name}` } }, { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '✅ 他還了', data: `settle:${personId}`, displayText: `${name}還了` } }] } : undefined,
+      footer:
+        net > 0
+          ? {
+              type: 'box',
+              layout: 'vertical',
+              spacing: 'sm',
+              contents: [
+                { type: 'button', style: 'primary', color: '#06C755', height: 'sm', action: { type: 'uri', label: '💚 把催款訊息傳給 LINE 好友', uri: lineShare(reminderTextFor(m, personId, name)) } },
+                { type: 'box', layout: 'horizontal', spacing: 'sm', contents: [{ type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '📣 催款文字', data: `remind:${personId}`, displayText: `催 ${name}` } }, { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '✅ 他還了', data: `settle:${personId}`, displayText: `${name}還了` } }] },
+              ],
+            }
+          : undefined,
     },
   }
 }

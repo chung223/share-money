@@ -6,6 +6,7 @@ import { computeSplit } from './split'
 import { payLines } from './reminder'
 import { categoryOf } from './category'
 import { meIdIn } from './balances'
+import { shareUrl } from './share'
 import type { AppData, Id } from './types'
 
 export interface MirrorOut {
@@ -23,6 +24,8 @@ export interface MirrorOut {
     total: number
     baseTotal: number | null
     tripId?: Id
+    /** 有效的分享連結（含金鑰）；bot 卡片用它做「傳給 LINE 好友」 */
+    shareUrl?: string
     payers: Id[]
     people: { id: Id; name: string; amount: number }[]
     transfers: { from: Id; to: Id; amount: number; currency: string; remaining: number; paid: number; settled: boolean }[]
@@ -47,6 +50,7 @@ export function buildMirror(d: AppData, limit = 60): MirrorOut {
         total: r.grandTotalRounded,
         baseTotal: r.baseGrandTotal,
         tripId: p.tripId,
+        shareUrl: p.share && p.share.expiresAt > Date.now() ? shareUrl(p.share.id, p.share.key, 'https://spilt.chung.men') : undefined,
         payers: r.multiPayer ? r.people.filter((x) => x.paid > 0).map((x) => x.person.id) : [p.payerId],
         // 共編旅程裡「我」可能是別的 id：把它對映成 me.id，bot 端才知道哪些是「欠我」
         people: r.people.map((x) => ({ id: x.person.id === me && me !== d.me.id ? d.me.id : x.person.id, name: x.person.name, amount: x.totalRounded })),
