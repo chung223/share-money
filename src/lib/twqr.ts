@@ -9,14 +9,14 @@ export type QuickPayApp = 'linepay' | 'jkopay' | 'twpay' | 'pxpay'
 /**
  * 2026-09-04 上網核對過的 URL scheme（數位時代／蘋果仁／PTT iOS 板／kinta.ma 整理）：
  * - 街口 jkos://transfer 直接開「轉帳」頁（但不帶對象與金額）
- * - LINE Pay 只有 generateQR（付款碼）與 scanQR（掃碼），沒有轉帳頁
+ * - LINE Pay：LINE 內只有 generateQR／scanQR；獨立 App 的 scheme line3rdp.com.linepaytw.upay:// 可直接開 App（社群拆 IPA 得到），轉帳在首頁一鍵。沒有帶對象／金額的轉帳頁連結。
  * - 台灣 Pay twmpshortcut://?type=scan 開掃碼
  * - 全支付 com.pxpay.plus://vmykjjouv 開轉帳
  * 沒有任何一家公開「帶金額轉帳」的連結。
  */
 export const QUICK_PAY: { id: QuickPayApp; label: string; emoji: string; scheme: string; hint: string }[] = [
   { id: 'jkopay', label: '街口轉帳', emoji: '🟥', scheme: 'jkos://transfer', hint: '街口轉帳頁已開，選對方、貼上金額' },
-  { id: 'linepay', label: 'LINE Pay', emoji: '💚', scheme: 'line://pay/generateQR', hint: '到 LINE Pay 的「轉帳」選對方，金額已幫你複製' },
+  { id: 'linepay', label: 'LINE Pay', emoji: '💚', scheme: 'line3rdp.com.linepaytw.upay://', hint: 'LINE Pay App 已開，點「轉帳」選對方，金額已幫你複製' },
   { id: 'pxpay', label: '全支付轉帳', emoji: '🟩', scheme: 'com.pxpay.plus://vmykjjouv', hint: '全支付轉帳頁已開，貼上金額' },
   { id: 'twpay', label: '台灣 Pay 掃碼', emoji: '🏦', scheme: 'twmpshortcut://?type=scan', hint: '用它掃另一台螢幕上的 QR；同一支手機請先存 QR 圖再從相簿選' },
 ]
@@ -45,7 +45,9 @@ export function isSafeAppUrl(u: string) {
 /** 常見 App 的範本，讓使用者一鍵加入再自己改。 */
 export const APP_LINK_PRESETS: { label: string; template: string }[] = [
   { label: '街口 掃碼', template: 'jkos://scanQRCode' },
-  { label: 'LINE Pay 掃碼', template: 'line://pay/scanQR' },
+  { label: 'LINE Pay App（獨立版）', template: 'line3rdp.com.linepaytw.upay://' },
+  { label: 'LINE Pay 付款碼（LINE 內）', template: 'line://pay/generateQR' },
+  { label: 'LINE Pay 掃碼（LINE 內）', template: 'line://pay/scanQR' },
   { label: '玉山 Wallet 掃碼', template: 'esunwallet://scanpay' },
   { label: '全支付 掃碼', template: 'com.pxpay.plus://nlauluf' },
   { label: 'Richart Life 掃碼', template: 'cardaily://?stateName=N000001_001' },

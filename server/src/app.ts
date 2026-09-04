@@ -606,12 +606,14 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
 
   // --- web push ---
   const notifyOwner = (accountId: string, body: string) => {
+    const subs = push ? (q.subsByAccount.all(accountId) as unknown as PushSubscriptionRow[]) : []
     if (line?.enabled) {
+      // push_enabled：0 關、1 只在沒有 Web Push 時才用 LINE（省額度，預設）、2 一律用 LINE
       const l = q.lineByAccount.get(accountId) as { line_user_id: string; push_enabled: number } | undefined
-      if (l && l.push_enabled) line.push(l.line_user_id, [{ type: 'text', text: `💸 ${body}\n打開 App 看看 👉 https://spilt.chung.men` }]).catch(() => {})
+      const useLine = l && (l.push_enabled === 2 || (l.push_enabled === 1 && subs.length === 0))
+      if (useLine) line.push(l.line_user_id, [{ type: 'text', text: `💸 ${body}\n打開 App 看看 👉 https://spilt.chung.men` }]).catch(() => {})
     }
     if (!push) return
-    const subs = q.subsByAccount.all(accountId) as unknown as PushSubscriptionRow[]
     const payload = JSON.stringify({ title: '반반 BanBan', body, url: '/', tag: 'banban-paid' })
     for (const sub of subs) {
       push
@@ -662,7 +664,7 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const accountId = requireAuth(c)
     if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
     const l = q.lineByAccount.get(accountId) as { line_user_id: string; display_name: string | null; push_enabled: number; summary_enabled: number; weekly_enabled: number; mirror_enabled: number; created_at: number } | undefined
-    return c.json({ available: !!line?.enabled, linked: !!l, displayName: l?.display_name ?? null, pushEnabled: !!l?.push_enabled, summaryEnabled: !!l?.summary_enabled, weeklyEnabled: !!l?.weekly_enabled, mirrorEnabled: !!l?.mirror_enabled, pending: (q.lineDraftCount.get(accountId) as { n: number }).n })
+    return c.json({ available: !!line?.enabled, linked: !!l, displayName: l?.display_name ?? null, pushEnabled: !!l?.push_enabled, pushMode: (['off', 'fallback', 'always'] as const)[l?.push_enabled ?? 0] ?? 'always', summaryEnabled: !!l?.summary_enabled, weeklyEnabled: !!l?.weekly_enabled, mirrorEnabled: !!l?.mirror_enabled, pending: (q.lineDraftCount.get(accountId) as { n: number }).n })
   })
   app.post('/api/line/link-code', (c) => {
     if (!line?.enabled) return c.json({ error: 'line_disabled' }, 404)
@@ -698,7 +700,8 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const pick = (k: string, cur: number) => (typeof body?.[k] === 'boolean' ? (body[k] ? 1 : 0) : cur)
     const mirror = pick('mirrorEnabled', l.mirror_enabled)
     const summary = mirror ? 1 : pick('summaryEnabled', l.summary_enabled) // 等級 2 包含等級 1
-    q.lineSetSettings.run(pick('pushEnabled', l.push_enabled), summary, summary ? pick('weeklyEnabled', l.weekly_enabled) : 0, mirror, accountId)
+    const pushMode = ['off', 'fallback', 'always'].includes(body?.pushMode) ? ['off', 'fallback', 'always'].indexOf(body.pushMode) : pick('pushEnabled', l.push_enabled)
+    q.lineSetSettings.run(pushMode, summary, summary ? pick('weeklyEnabled', l.weekly_enabled) : 0, mirror, accountId)
     if (!summary) q.lineSummaryDelete.run(accountId)
     if (!mirror) q.lineMirrorDelete.run(accountId)
     return c.json({ ok: true })

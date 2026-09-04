@@ -7,6 +7,7 @@ export interface LineStatus {
   linked: boolean
   displayName: string | null
   pushEnabled: boolean
+  pushMode: 'off' | 'fallback' | 'always'
   summaryEnabled: boolean
   weeklyEnabled: boolean
   mirrorEnabled: boolean
@@ -51,7 +52,7 @@ export const lineApi = {
     const a = await authed()
     await api.raw(a.base, '/api/line/push', { method: 'POST', token: a.token, json: { enabled } })
   },
-  async settings(patch: { pushEnabled?: boolean; summaryEnabled?: boolean; weeklyEnabled?: boolean; mirrorEnabled?: boolean }) {
+  async settings(patch: { pushEnabled?: boolean; pushMode?: 'off' | 'fallback' | 'always'; summaryEnabled?: boolean; weeklyEnabled?: boolean; mirrorEnabled?: boolean }) {
     const a = await authed()
     await j(await api.raw(a.base, '/api/line/settings', { method: 'POST', token: a.token, json: patch }))
   },

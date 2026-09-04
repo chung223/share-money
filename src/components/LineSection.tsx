@@ -49,10 +49,20 @@ export default function LineSection() {
             <span className="pill pill--mint">✅ 已連結 {st.displayName ? `LINE「${st.displayName}」` : ''}</span>
             {st.pending > 0 && <span className="pill pill--pink">收件匣 {st.pending} 筆</span>}
           </div>
-          <label className="row gap-s center small">
-            <input type="checkbox" checked={st.pushEnabled} disabled={busy} onChange={(e) => run(() => lineApi.setPush(e.target.checked))} />
-            朋友按「我轉了」時用 LINE 通知我（吃官方帳號的免費推播額度）
-          </label>
+          <div className="label">朋友按「我轉了」時的 LINE 通知（每則吃官方帳號免費額度，每月 200 則）</div>
+          <div className="chip-row">
+            {(
+              [
+                ['fallback', '沒有 App 推播時才用 LINE（省額度）'],
+                ['always', '一律用 LINE'],
+                ['off', '不用 LINE'],
+              ] as const
+            ).map(([v, l]) => (
+              <button key={v} type="button" className={`chip chip--xs ${st.pushMode === v ? 'is-on' : ''}`} disabled={busy} onClick={() => run(() => lineApi.settings({ pushMode: v }))}>
+                {l}
+              </button>
+            ))}
+          </div>
           <label className="row gap-s center small">
             <input
               type="checkbox"
