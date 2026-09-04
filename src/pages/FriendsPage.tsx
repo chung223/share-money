@@ -7,6 +7,8 @@ import { fmtDateShort, payLines } from '../lib/reminder'
 import { shareUrl } from '../lib/share'
 import { isMobile, lineShareUrl } from '../lib/lineShare'
 import { Avatar, Empty, Sheet } from '../components/ui'
+import PersonShareSheet from '../components/PersonShareSheet'
+import type { Person } from '../lib/types'
 
 /** 以人為單位：每個人跨帳本的淨額、明細、一鍵結清、催款。 */
 export default function FriendsPage() {
@@ -15,6 +17,8 @@ export default function FriendsPage() {
   const showToast = useStore((s) => s.showToast)
   const [openId, setOpenId] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<PersonBalance | null>(null)
+  const [linkFor, setLinkFor] = useState<Person | null>(null)
+  const personShares = useStore((s) => s.data.personShares)
   const base = data.baseCurrency
   const balances = useMemo(() => personBalances(data.projects, data.me.id, base, data.trips ?? []), [data.projects, data.me.id, base, data.trips])
   // 沒有未結清的人也列出來（完全結清）
@@ -131,6 +135,9 @@ export default function FriendsPage() {
                           📣 其他方式
                         </button>
                       )}
+                      <button type="button" className={`btn btn--sm ${personShares?.[b.person.id] && personShares[b.person.id].expiresAt > Date.now() ? 'btn--mint' : 'btn--ghost'}`} onClick={() => setLinkFor(b.person)}>
+                        🔗 給{b.person.name}的連結
+                      </button>
                       <button type="button" className="btn btn--ghost btn--sm" onClick={() => setConfirm(b)}>
                         ✅ 全部結清
                       </button>
@@ -150,6 +157,7 @@ export default function FriendsPage() {
         </div>
       </main>
 
+      <PersonShareSheet person={linkFor} open={!!linkFor} onClose={() => setLinkFor(null)} />
       <Sheet open={!!confirm} onClose={() => setConfirm(null)} title="全部結清">
         {confirm && (
           <div className="stack">

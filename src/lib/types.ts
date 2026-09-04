@@ -155,6 +155,8 @@ export interface AppData {
   friends: Person[]
   groups?: Group[]
   trips?: Trip[]
+  /** 給某個人的跨帳本連結（personId → share）。快照在同步時若有帳本更新會自動重傳。 */
+  personShares?: Record<Id, ProjectShare>
   projects: Project[]
   baseCurrency: string
   payInfo?: PayInfo

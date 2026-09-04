@@ -122,11 +122,11 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     shareById: db.raw.prepare('SELECT id, account_id, cipher, expires_at, og_title, updated_at FROM shares WHERE id = ?'),
     deleteShare: db.raw.prepare('DELETE FROM shares WHERE id = ? AND account_id = ?'),
     paidPersons: db.raw.prepare(
-      "SELECT person_id, kind FROM share_events WHERE share_id = ? AND id IN (SELECT MAX(id) FROM share_events WHERE share_id = ? GROUP BY person_id)",
+      "SELECT person_id, kind, project_id FROM share_events WHERE share_id = ? AND id IN (SELECT MAX(id) FROM share_events WHERE share_id = ? GROUP BY person_id, COALESCE(project_id, ''))",
     ),
-    insertEvent: db.raw.prepare('INSERT INTO share_events (share_id, person_id, kind, created_at, note, label) VALUES (?, ?, ?, ?, ?, ?)'),
+    insertEvent: db.raw.prepare('INSERT INTO share_events (share_id, person_id, kind, created_at, note, label, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)'),
     pendingEvents: db.raw.prepare(
-      'SELECT e.id, e.share_id, s.project_id, e.person_id, e.kind, e.created_at, e.note, e.label FROM share_events e JOIN shares s ON s.id = e.share_id WHERE s.account_id = ? AND e.acked = 0 ORDER BY e.id',
+      'SELECT e.id, e.share_id, COALESCE(e.project_id, s.project_id) AS project_id, e.person_id, e.kind, e.created_at, e.note, e.label FROM share_events e JOIN shares s ON s.id = e.share_id WHERE s.account_id = ? AND e.acked = 0 ORDER BY e.id',
     ),
     subsByAccount: db.raw.prepare('SELECT endpoint, p256dh, auth FROM push_subs WHERE account_id = ?'),
     upsertSub: db.raw.prepare(
@@ -333,8 +333,10 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const row = q.shareById.get(id) as { id: string; cipher: string; expires_at: number } | undefined
     if (!row) return c.json({ error: 'not_found' }, 404)
     if (row.expires_at < now()) return c.json({ error: 'expired' }, 410)
-    const paid = (q.paidPersons.all(id, id) as { person_id: string; kind: string }[]).filter((e) => e.kind === 'paid').map((e) => e.person_id)
-    return c.json({ cipher: row.cipher, expiresAt: row.expires_at, paid })
+    const rows = q.paidPersons.all(id, id) as { person_id: string; kind: string; project_id: string | null }[]
+    const paid = rows.filter((e) => e.kind === 'paid').map((e) => e.person_id)
+    const paidDetail = rows.filter((e) => e.kind === 'paid').map((e) => ({ personId: e.person_id, projectId: e.project_id }))
+    return c.json({ cipher: row.cipher, expiresAt: row.expires_at, paid, paidDetail })
   })
 
   // --- Open Graph: preview image + share page HTML with meta tags (crawlers never see the #key) ---
@@ -400,10 +402,12 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const kind = body.kind === 'unpaid' ? 'unpaid' : 'paid'
     const note = typeof body.note === 'string' && body.note.length > 0 && body.note.length <= NOTE_MAX ? body.note : null
     const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, LABEL_MAX) : null
+    // 「給某人的連結」跨多本帳：事件要指回原本的帳本
+    const projectId = typeof body.projectId === 'string' && ID_RE.test(body.projectId) ? body.projectId : null
     const row = q.shareById.get(id) as { account_id: string; expires_at: number } | undefined
     if (!row) return c.json({ error: 'not_found' }, 404)
     if (row.expires_at < now()) return c.json({ error: 'expired' }, 410)
-    q.insertEvent.run(id, body.personId, kind, now(), note, label)
+    q.insertEvent.run(id, body.personId, kind, now(), note, label, projectId)
     if (kind === 'paid' && push) notifyOwner(row.account_id, `${label ?? '有人'} 說已經轉帳了 💸`)
     return c.json({ ok: true })
   })

@@ -127,6 +127,7 @@ const MIGRATIONS: [table: string, column: string, ddl: string][] = [
   ['line_links', 'weekly_enabled', 'ALTER TABLE line_links ADD COLUMN weekly_enabled INTEGER NOT NULL DEFAULT 0'],
   ['line_links', 'last_weekly_at', 'ALTER TABLE line_links ADD COLUMN last_weekly_at INTEGER NOT NULL DEFAULT 0'],
   ['line_drafts', 'origin', 'ALTER TABLE line_drafts ADD COLUMN origin TEXT'],
+  ['share_events', 'project_id', 'ALTER TABLE share_events ADD COLUMN project_id TEXT'],
   ['line_links', 'mirror_enabled', 'ALTER TABLE line_links ADD COLUMN mirror_enabled INTEGER NOT NULL DEFAULT 0'],
 ]
 

@@ -2,7 +2,9 @@ import { create } from 'zustand'
 import type { AppData, Extra, Id, Item, Person, Project, SplitMode, Trip } from './lib/types'
 import { PALETTE, PERSON_EMOJIS } from './lib/types'
 import { api, apiBase, applyShareEvents, canon, decryptWithKey, deriveSyncKeys, encryptWithKey, forUpload, generateSecret, mergeData, parseSecret, SyncError, type SyncKeys } from './lib/sync'
-import { buildSnapshot, decryptNote, encryptSnapshot, generateShareKey } from './lib/share'
+import { buildPersonSnapshot, buildSnapshot, decryptNote, encryptSnapshot, encryptWithKeyString, generateShareKey, projectsForPerson } from './lib/share'
+import { meIdIn } from './lib/balances'
+import { computeSplit } from './lib/split'
 import { clearSyncMeta, loadSyncMeta, saveSyncMeta } from './lib/syncMeta'
 import { categoryOf } from './lib/category'
 import { buildBundle, bundleHash, decryptBundle, deriveTripKeys, encryptBundle, generateTripSecret, mergeBundle, tripApi, type TripBundle } from './lib/tripSync'
@@ -120,6 +122,8 @@ interface State {
   disableSync: (deleteRemote: boolean) => Promise<void>
   syncNow: (opts?: { quiet?: boolean }) => Promise<void>
   createShare: (projectId: string, days: number, ogTitle?: string | null) => Promise<string>
+  createPersonShare: (personId: string, days: number) => Promise<string>
+  revokePersonShare: (personId: string) => Promise<void>
   revokeShare: (projectId: string) => Promise<void>
 }
 
@@ -597,6 +601,28 @@ export const useStore = create<State>((set, get) => ({
           }
         }
 
+        // 3b. 給某人的連結：任何相關帳本更新後重傳快照；伺服器沒有了就拿掉
+        for (const [pid, sh] of Object.entries(data.personShares ?? {})) {
+          const sv = serverShares.get(`person_${pid}`)
+          if (!sv || sv.expiresAt < now) {
+            if (data === get().data) data = structuredClone(data)
+            delete data.personShares![pid]
+            changed = true
+            continue
+          }
+          const projects = projectsForPerson(data.projects, pid, (p) => meIdIn(p, data.me.id, data.trips ?? []), data.baseCurrency, (p) => computeSplit(p, data.baseCurrency).transfers)
+          const latest = Math.max(0, ...projects.map((p) => p.updatedAt))
+          if (latest > sh.uploadedAt) {
+            const person = [data.me, ...data.friends, ...data.projects.flatMap((p) => p.people)].find((x) => x.id === pid)
+            if (!person) continue
+            const cipher = await encryptWithKeyString(sh.key, buildPersonSnapshot({ person, projects, ownerId: data.me.id, ownerName: data.me.name, baseCurrency: data.baseCurrency, payInfo: data.payInfo }))
+            await api.share(base, keys.token, { projectId: `person_${pid}`, cipher, expiresAt: sh.expiresAt, ogTitle: `${person.name} 的帳單 · ${projects.length} 筆` })
+            if (data === get().data) data = structuredClone(data)
+            data.personShares![pid] = { ...sh, uploadedAt: now }
+            changed = true
+          }
+        }
+
         if (changed) {
           if (get().locked) return
           set({ data })
@@ -684,6 +710,35 @@ export const useStore = create<State>((set, get) => ({
     const r = await api.share(apiBase(cfg.serverUrl), keys.token, { projectId, cipher, expiresAt, ogTitle: og })
     get().updateProject(projectId, (pp) => (pp.share = { id: r.id, key, expiresAt: r.expiresAt, uploadedAt: Date.now(), ogTitle: og }), false)
     return r.id
+  },
+
+  createPersonShare: async (personId, days) => {
+    if (!get().data.sync) await get().enableSync()
+    const s = get()
+    const d = s.data
+    const person = [d.me, ...d.friends, ...d.projects.flatMap((p) => p.people)].find((x) => x.id === personId)
+    if (!person) throw new Error('找不到這個人')
+    const keys = await keysFor(d.sync!.secret)
+    const existing = d.personShares?.[personId]
+    const key = existing?.key ?? generateShareKey()
+    const projects = projectsForPerson(d.projects, personId, (p) => meIdIn(p, d.me.id, d.trips ?? []), d.baseCurrency, (p) => computeSplit(p, d.baseCurrency).transfers)
+    const cipher = await encryptWithKeyString(key, buildPersonSnapshot({ person, projects, ownerId: d.me.id, ownerName: d.me.name, baseCurrency: d.baseCurrency, payInfo: d.payInfo }))
+    const expiresAt = Date.now() + days * 86_400_000
+    const r = await api.share(apiBase(d.sync!.serverUrl), keys.token, { projectId: `person_${personId}`, cipher, expiresAt, ogTitle: `${person.name} 的帳單 · ${projects.length} 筆` })
+    get().update((dd) => (dd.personShares = { ...(dd.personShares ?? {}), [personId]: { id: r.id, key, expiresAt: r.expiresAt, uploadedAt: Date.now(), ogTitle: null } }))
+    return r.id
+  },
+
+  revokePersonShare: async (personId) => {
+    const d = get().data
+    const sh = d.personShares?.[personId]
+    if (sh && d.sync) {
+      const keys = await keysFor(d.sync.secret)
+      await api.unshare(apiBase(d.sync.serverUrl), keys.token, sh.id).catch(() => {})
+    }
+    get().update((dd) => {
+      if (dd.personShares) delete dd.personShares[personId]
+    })
   },
 
   revokeShare: async (projectId) => {

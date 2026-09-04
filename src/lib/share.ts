@@ -17,6 +17,59 @@ export interface ShareSnapshot {
   sharedAt: number
 }
 
+/** 給某個人的連結：他在所有帳本裡跟我的往來（未結清的 + 最近結清的），一條連結看完、逐筆按「我轉了」。 */
+export interface PersonSnapshot {
+  v: 2
+  kind: 'person'
+  personId: string
+  person: { id: string; name: string; emoji: string; color: string }
+  ownerId: string
+  ownerName: string
+  baseCurrency: string
+  payInfo?: PayInfo
+  projects: Omit<Project, 'share'>[]
+  sharedAt: number
+}
+export type AnySnapshot = ShareSnapshot | PersonSnapshot
+export function isPersonSnapshot(s: AnySnapshot): s is PersonSnapshot {
+  return (s as PersonSnapshot).v === 2 && (s as PersonSnapshot).kind === 'person'
+}
+
+/** 挑出這個人有參與、且跟我之間有轉帳（未結清，或 60 天內結清）的帳本 */
+export function projectsForPerson(projects: Project[], personId: string, meIds: (p: Project) => string | null, _base: string, computeTransfers: (p: Project) => { from: string; to: string; settled: boolean }[]): Project[] {
+  const cutoff = Date.now() - 60 * 86_400_000
+  return projects
+    .filter((p) => {
+      const me = meIds(p)
+      if (!me || !p.people.some((x) => x.id === personId)) return false
+      const ts = computeTransfers(p).filter((t) => (t.from === personId && t.to === me) || (t.from === me && t.to === personId))
+      return ts.some((t) => !t.settled) || (ts.length > 0 && p.updatedAt > cutoff)
+    })
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 30)
+}
+
+export function buildPersonSnapshot(o: { person: PersonSnapshot['person']; projects: Project[]; ownerId: string; ownerName: string; baseCurrency: string; payInfo?: PayInfo }): PersonSnapshot {
+  return {
+    v: 2,
+    kind: 'person',
+    personId: o.person.id,
+    person: o.person,
+    ownerId: o.ownerId,
+    ownerName: o.ownerName,
+    baseCurrency: o.baseCurrency,
+    payInfo: o.payInfo,
+    projects: o.projects.map((p) => {
+      const { share: _s, ...rest } = p
+      return rest
+    }),
+    sharedAt: Date.now(),
+  }
+}
+export async function decryptAnySnapshot(key: string, cipher: string) {
+  return decryptWithKey<AnySnapshot>(await importKey(key), cipher)
+}
+
 export function generateShareKey() {
   const b = new Uint8Array(16)
   crypto.getRandomValues(b)
@@ -27,6 +80,9 @@ async function importKey(key: string) {
   return crypto.subtle.importKey('raw', unb64url(key) as BufferSource, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
 }
 
+export async function encryptWithKeyString(key: string, value: unknown) {
+  return encryptWithKey(await importKey(key), value)
+}
 export async function encryptSnapshot(key: string, snap: ShareSnapshot) {
   return encryptWithKey(await importKey(key), snap)
 }

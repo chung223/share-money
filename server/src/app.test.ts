@@ -527,3 +527,18 @@ describe('LINE level 2: mirror, queries, commands, utilities', () => {
     expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('等級 2')
   })
 })
+
+describe('person share events carry projectId', () => {
+  it('routes paid events to the given project and reports per-project paid state', async () => {
+    const { call } = setup()
+    const { id } = await body(call('/api/share', post({ projectId: 'person_ming', cipher: 'enc', expiresAt: T0 + 86_400_000 }), A))
+    await call(`/api/share/${id}/paid`, post({ personId: 'ming_me', projectId: 'p1' }))
+    await call(`/api/share/${id}/paid`, post({ personId: 'ming_me', projectId: 'p2' }))
+    const pub = await body(call(`/api/share/${id}`))
+    expect(pub.paidDetail).toEqual([{ personId: 'ming_me', projectId: 'p1' }, { personId: 'ming_me', projectId: 'p2' }])
+    const s = await body(call('/api/sync', {}, A))
+    expect(s.events.map((e: { projectId: string }) => e.projectId)).toEqual(['p1', 'p2'])
+    await call(`/api/share/${id}/paid`, post({ personId: 'ming_me', projectId: 'p1', kind: 'unpaid' }))
+    expect((await body(call(`/api/share/${id}`))).paidDetail).toEqual([{ personId: 'ming_me', projectId: 'p2' }])
+  })
+})

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { computeSplit, fmtMoney } from '../lib/split'
-import { decryptSnapshot, encryptNote, parseShareLocation, type ShareSnapshot } from '../lib/share'
+import { decryptAnySnapshot, encryptNote, isPersonSnapshot, parseShareLocation, type PersonSnapshot, type ShareSnapshot } from '../lib/share'
 import { categoryOf } from '../lib/category'
 import type { Project } from '../lib/types'
 import { Avatar, Confetti, Mascot } from '../components/ui'
 import QrCode from '../components/QrCode'
 import { buildAppUrl, isSafeAppUrl, QUICK_PAY, twqrTransfer } from '../lib/twqr'
 
-type Status = { kind: 'loading' } | { kind: 'error'; title: string; hint: string; mood: 'sad' | 'sleepy' } | { kind: 'ok'; snap: ShareSnapshot; paid: string[] }
+type Status = { kind: 'loading' } | { kind: 'error'; title: string; hint: string; mood: 'sad' | 'sleepy' } | { kind: 'ok'; snap: ShareSnapshot; paid: string[] } | { kind: 'person'; snap: PersonSnapshot; paidDetail: { personId: string; projectId: string | null }[] }
 
 const loc = parseShareLocation(location)
 const WHO_KEY = loc ? `banban:share:${loc.id}:who` : ''
@@ -40,9 +40,10 @@ export default function SharePage() {
         if (r.status === 404) return setStatus({ kind: 'error', title: '找不到這個帳本', hint: '連結可能已經被停用了。', mood: 'sad' })
         if (r.status === 410) return setStatus({ kind: 'error', title: '連結過期了', hint: '請對方再產生一次新的連結。', mood: 'sleepy' })
         if (!r.ok) throw new Error('HTTP ' + r.status)
-        const j = (await r.json()) as { cipher: string; paid: string[] }
-        const snap = await decryptSnapshot(loc.key, j.cipher)
-        setStatus({ kind: 'ok', snap, paid: j.paid })
+        const j = (await r.json()) as { cipher: string; paid: string[]; paidDetail?: { personId: string; projectId: string | null }[] }
+        const snap = await decryptAnySnapshot(loc.key, j.cipher)
+        if (isPersonSnapshot(snap)) setStatus({ kind: 'person', snap, paidDetail: j.paidDetail ?? [] })
+        else setStatus({ kind: 'ok', snap, paid: j.paid })
       } catch (e) {
         setStatus({ kind: 'error', title: '打不開', hint: e instanceof DOMException || (e instanceof Error && /decrypt|JSON/i.test(e.message)) ? '金鑰對不上，請確認連結有完整複製。' : '網路怪怪的，等一下再試。', mood: 'sad' })
       }
@@ -55,6 +56,7 @@ export default function SharePage() {
   }
 
   const project: Project | null = status.kind === 'ok' ? { ...status.snap.project, share: undefined } : null
+  const personView = status.kind === 'person' ? status : null
   const result = useMemo(() => (project && status.kind === 'ok' ? computeSplit(project, status.snap.baseCurrency) : null), [project, status])
 
   if (status.kind === 'loading') {
@@ -64,6 +66,9 @@ export default function SharePage() {
         <div className="splash__name">반반</div>
       </div>
     )
+  }
+  if (personView) {
+    return <PersonBill view={personView} onReported={(paidDetail) => setStatus({ ...personView, paidDetail })} flash={flash} toast={toast} />
   }
   if (status.kind === 'error') {
     return (
@@ -78,8 +83,9 @@ export default function SharePage() {
     )
   }
 
+  if (status.kind !== 'ok' || !project) return null
   const { snap, paid } = status
-  const p = project!
+  const p = project
   const r = result!
   const cat = categoryOf(p)
   const base = snap.baseCurrency
@@ -385,6 +391,163 @@ function Footer() {
         🐥 我也想用 BanBan 分帳
       </a>
       <p className="muted small center-text">這頁的內容只有拿到連結的人解得開，伺服器看不到金額。</p>
+    </div>
+  )
+}
+
+
+/** 給某個人的跨帳本帳單 */
+function PersonBill({ view, onReported, flash, toast }: { view: { snap: PersonSnapshot; paidDetail: { personId: string; projectId: string | null }[] }; onReported: (d: { personId: string; projectId: string | null }[]) => void; flash: (t: string) => void; toast: string | null }) {
+  const { snap, paidDetail } = view
+  const base = snap.baseCurrency
+  const pay = snap.payInfo
+  const [busy, setBusy] = useState<string | null>(null)
+  const [confetti, setConfetti] = useState(false)
+  const rows = snap.projects.map((p) => {
+    const r = computeSplit({ ...p, share: undefined } as Project, base)
+    const mine = r.transfers.filter((t) => (t.from === snap.personId && t.to === snap.ownerId) || (t.from === snap.ownerId && t.to === snap.personId))
+    return { p, r, mine }
+  })
+  const owe = rows.flatMap(({ p, mine }) => mine.filter((t) => t.from === snap.personId && !t.settled).map((t) => ({ p, t })))
+  const owed = rows.flatMap(({ p, mine }) => mine.filter((t) => t.to === snap.personId && !t.settled).map((t) => ({ p, t })))
+  const sameCur = [...owe, ...owed].every((x) => x.t.dueCurrency === base)
+  const total = sameCur ? owe.reduce((a, x) => a + x.t.remaining, 0) - owed.reduce((a, x) => a + x.t.remaining, 0) : null
+  const isReported = (p: Project, key: string) => paidDetail.some((d) => d.personId === key && d.projectId === p.id)
+  const allReported = owe.length > 0 && owe.every(({ p, t }) => isReported(p, t.key))
+
+  const report = async (p: Project, key: string, kind: 'paid' | 'unpaid') => {
+    if (!loc) return
+    setBusy(p.id + key)
+    try {
+      const res = await fetch(`/api/share/${loc.id}/paid`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ personId: key, projectId: p.id, kind, label: snap.person.name }) })
+      if (!res.ok) throw new Error('HTTP ' + res.status)
+      const rest = paidDetail.filter((d) => !(d.personId === key && d.projectId === p.id))
+      onReported(kind === 'paid' ? [...rest, { personId: key, projectId: p.id }] : rest)
+      if (kind === 'paid') {
+        setConfetti(true)
+        setTimeout(() => setConfetti(false), 2600)
+        flash(THANKS[Math.floor(Math.random() * THANKS.length)])
+      } else flash('已取消')
+    } catch {
+      flash('送不出去，等一下再試')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const copy = (text: string, what: string) => navigator.clipboard.writeText(text).then(() => flash(`已複製${what} 📋`)).catch(() => flash('複製失敗'))
+  const twqr = total && total > 0 && base === 'TWD' && pay?.bankCode && pay.account ? twqrTransfer({ bankCode: pay.bankCode, account: pay.account, amount: total, note: `${snap.ownerName}的帳單` }) : null
+
+  return (
+    <div className="page share-page">
+      <Confetti on={confetti} />
+      <div className="share-hero">
+        <Mascot size={84} mood={allReported ? 'happy' : 'wow'} className="mascot--float" />
+        <div className="share-hero__text">
+          <div className="share-hero__owner">{snap.ownerName} 整理給你的帳單</div>
+          <div className="share-hero__name">
+            {snap.person.emoji} {snap.person.name}
+          </div>
+          <div className="muted small">{snap.projects.length} 本帳 · {owe.length} 筆待轉</div>
+        </div>
+      </div>
+      <main className="stack">
+        <section className={`card stack share-me c-border-${snap.person.color}`}>
+          <div className="center-items stack-xs">
+            <div className="muted small">{total != null && total < 0 ? `${snap.ownerName} 該給你` : '你總共要轉'}</div>
+            <div className="share-amount share-amount--big">{total != null ? fmtMoney(Math.abs(total), base) : '看下面各筆'}</div>
+            {owed.length > 0 && total != null && total > 0 && <div className="muted small">（已扣掉 {snap.ownerName} 欠你的 {fmtMoney(owed.reduce((a, x) => a + x.t.remaining, 0), base)}）</div>}
+          </div>
+          {total != null && total > 0 && pay && (pay.account || pay.linePay) && (
+            <div className="pay-box stack-s">
+              {twqr && (
+                <div className="twqr">
+                  <QrCode text={twqr} size={168} />
+                  <div className="small stack-xs">
+                    <div className="strong">🏦 一次轉總額（TWQR）</div>
+                    <div className="muted">銀行 App 掃碼轉帳，帳號和 {fmtMoney(total, base)} 自動帶入。</div>
+                  </div>
+                </div>
+              )}
+              {pay.account && (
+                <button type="button" className="pay-box__row" onClick={() => copy(`${pay.bankCode ? pay.bankCode + ' ' : ''}${pay.account}`, '帳號')}>
+                  <span>
+                    🏦 {pay.bankCode}
+                    {pay.bankName ? ` ${pay.bankName}` : ''}
+                  </span>
+                  <span className="strong">{pay.account}</span>
+                  <span className="pill pill--pink">複製</span>
+                </button>
+              )}
+              {pay.linePay && (
+                <a className="btn btn--mint" href={pay.linePay} target="_blank" rel="noreferrer">
+                  💚 用 LINE Pay / 街口 轉帳
+                </a>
+              )}
+            </div>
+          )}
+        </section>
+
+        <section className="card stack">
+          <div className="section-title">每一筆</div>
+          <div className="stack-s">
+            {rows.map(({ p, r, mine }) => {
+              const cat = categoryOf(p)
+              return (
+                <div key={p.id} className="stack-xs" style={{ paddingBottom: 8, borderBottom: '1px solid var(--line)' }}>
+                  <div className="row between center">
+                    <span className="strong">
+                      {p.emoji} {p.name || cat.unnamed}
+                    </span>
+                    <span className="muted small">{p.date} · 總共 {fmtMoney(r.grandTotalRounded, p.currency)}</span>
+                  </div>
+                  {mine.length === 0 && <div className="muted small">這本沒有你跟 {snap.ownerName} 的轉帳</div>}
+                  {mine.map((t) => {
+                    const iOwe = t.from === snap.personId
+                    const reported = isReported(p, t.key)
+                    return (
+                      <div key={t.key} className="line line--person">
+                        <span>
+                          {iOwe ? `你 → ${snap.ownerName}` : `${snap.ownerName} → 你`} <span className="strong">{fmtMoney(t.remaining, t.dueCurrency)}</span>
+                          {t.paid > 0 && !t.settled && <span className="muted small">（已還 {fmtMoney(t.paid, t.dueCurrency)}）</span>}
+                        </span>
+                        <span>
+                          {t.settled ? (
+                            <span className="pill pill--mint">✓ 已結清</span>
+                          ) : !iOwe ? (
+                            <span className="pill pill--grey">等對方</span>
+                          ) : reported ? (
+                            <button type="button" className="pill pill--mint" onClick={() => report(p, t.key, 'unpaid')} disabled={busy === p.id + t.key}>
+                              ✅ 已回報（取消）
+                            </button>
+                          ) : (
+                            <button type="button" className="btn btn--primary btn--sm" disabled={busy === p.id + t.key} onClick={() => report(p, t.key, 'paid')}>
+                              💸 我轉了
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+          {owe.length > 1 && !allReported && (
+            <button
+              type="button"
+              className="btn btn--primary btn--lg btn--pulse"
+              disabled={!!busy}
+              onClick={async () => {
+                for (const { p, t } of owe) if (!isReported(p, t.key)) await report(p, t.key, 'paid')
+              }}
+            >
+              💸 全部轉了（{owe.length} 筆一起回報）
+            </button>
+          )}
+        </section>
+      </main>
+      <Footer />
+      {toast && <div className="toast">{toast}</div>}
     </div>
   )
 }
