@@ -76,6 +76,18 @@ CREATE TABLE IF NOT EXISTS line_link_codes (
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   expires_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS line_summaries (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  payload TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS line_group_members (
+  group_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  display_name TEXT,
+  last_seen_at INTEGER NOT NULL,
+  PRIMARY KEY (group_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS line_drafts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -98,6 +110,10 @@ const MIGRATIONS: [table: string, column: string, ddl: string][] = [
   ['share_events', 'note', 'ALTER TABLE share_events ADD COLUMN note TEXT'],
   ['share_events', 'label', 'ALTER TABLE share_events ADD COLUMN label TEXT'],
   ['shares', 'og_title', 'ALTER TABLE shares ADD COLUMN og_title TEXT'],
+  ['line_links', 'summary_enabled', 'ALTER TABLE line_links ADD COLUMN summary_enabled INTEGER NOT NULL DEFAULT 0'],
+  ['line_links', 'weekly_enabled', 'ALTER TABLE line_links ADD COLUMN weekly_enabled INTEGER NOT NULL DEFAULT 0'],
+  ['line_links', 'last_weekly_at', 'ALTER TABLE line_links ADD COLUMN last_weekly_at INTEGER NOT NULL DEFAULT 0'],
+  ['line_drafts', 'origin', 'ALTER TABLE line_drafts ADD COLUMN origin TEXT'],
 ]
 
 export function openDb(file: string): Db {

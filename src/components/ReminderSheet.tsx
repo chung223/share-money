@@ -12,6 +12,7 @@ import { reminderSystem, reminderUser } from '../lib/aiAssist'
 import { payLines, fmtDateShort } from '../lib/reminder'
 import { useAiAvailable } from './useAiAvailable'
 import { isMobile, lineShareUrl } from '../lib/lineShare'
+import { lineApi } from '../lib/line'
 
 const TONE_KEY = 'banban:reminderTone'
 
@@ -22,7 +23,36 @@ export default function ReminderSheet({ p, person, amount, baseAmount, amountTex
   const [tone, setTone] = useState<Tone>(() => (localStorage.getItem(TONE_KEY) as Tone) || 'normal')
   const [text, setText] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
+  const [meme, setMeme] = useState<{ url: string; busy: boolean } | null>(null)
+  const hasSync = useStore((s) => !!s.data.sync)
   const ai = useAiAvailable()
+  const makeMeme = async () => {
+    if (!person) return
+    setMeme({ url: '', busy: true })
+    try {
+      const amt = amountText ?? (amount !== undefined ? fmtMoney(amount, p.currency) : fmtMoney(person.totalRounded, p.currency))
+      const mood = tone === 'angry' ? 'angry' : tone === 'cute' ? 'cute' : 'sad'
+      const r = await lineApi.meme({ name: person.person.name, amountText: amt, mood })
+      setMeme({ url: r.url, busy: false })
+    } catch (e) {
+      setMeme(null)
+      showToast(e instanceof Error ? e.message : '生圖失敗', '😵')
+    }
+  }
+  const shareMeme = async () => {
+    if (!meme?.url) return
+    try {
+      const blob = await (await fetch(meme.url)).blob()
+      const file = new File([blob], 'banban-meme.png', { type: 'image/png' })
+      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], text })
+      else {
+        await navigator.clipboard.writeText(`${text}\n${meme.url}`)
+        showToast('已複製文字＋圖片連結', '📋')
+      }
+    } catch {
+      /* cancelled */
+    }
+  }
   const writeWithAi = async () => {
     if (!person) return
     setAiBusy(true)
@@ -82,9 +112,30 @@ export default function ReminderSheet({ p, person, amount, baseAmount, amountTex
         </div>
         <textarea className="textarea" rows={7} value={text} onChange={(e) => setText(e.target.value)} />
         {ai && (
-          <button type="button" className="btn btn--mint btn--sm center-self" disabled={aiBusy} onClick={writeWithAi}>
-            {aiBusy ? 'AI 想句子中…' : '✨ 讓 AI 寫一句（可一直換）'}
-          </button>
+          <div className="row gap-s center-self wrap">
+            <button type="button" className="btn btn--mint btn--sm" disabled={aiBusy} onClick={writeWithAi}>
+              {aiBusy ? 'AI 想句子中…' : '✨ 讓 AI 寫一句'}
+            </button>
+            {hasSync && (
+              <button type="button" className="btn btn--butter btn--sm" disabled={!!meme?.busy} onClick={makeMeme}>
+                {meme?.busy ? '生圖中（約 30 秒）…' : '🖼 生一張催款梗圖'}
+              </button>
+            )}
+          </div>
+        )}
+        {meme?.url && (
+          <div className="stack-xs center-items">
+            <img src={meme.url} alt="催款梗圖" style={{ width: 220, borderRadius: 16 }} />
+            <div className="row gap-s">
+              <button type="button" className="btn btn--primary btn--sm" onClick={shareMeme}>
+                📤 傳圖給對方
+              </button>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={makeMeme}>
+                🎲 換一張
+              </button>
+            </div>
+            <p className="muted small">圖片連結 7 天有效，生一張算 3 次 AI 額度。</p>
+          </div>
         )}
         {!hasPay && (
           <p className="small">

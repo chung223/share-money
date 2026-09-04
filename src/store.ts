@@ -630,6 +630,16 @@ export const useStore = create<State>((set, get) => ({
       set({ sync: { status: 'idle', lastSyncAt: meta.lastSyncAt, error: null, dirty: meta.dirty } })
       if (Array.isArray((remote as { lineDrafts?: unknown }).lineDrafts)) set({ lineDrafts: (remote as unknown as { lineDrafts: import('./lib/line').LineDraft[] }).lineDrafts })
       get().syncTrips().catch(() => {})
+      // LINE 催款摘要（使用者選擇性開啟；旗標存 localStorage 免得每次多打一次 status）
+      if (localStorage.getItem('banban:lineSummary') === '1') {
+        import('./lib/balances').then(({ personBalances }) => {
+          const d = get().data
+          const items = personBalances(d.projects, d.me.id, d.baseCurrency, d.trips ?? [])
+            .filter((b) => b.net > 0)
+            .map((b) => ({ name: b.person.name, amount: b.net, currency: d.baseCurrency, projects: [...new Set(b.lines.filter((l) => l.signed > 0).map((l) => l.project.name || l.project.emoji))].slice(0, 5) }))
+          return import('./lib/line').then(({ lineApi }) => lineApi.summary(items, d.baseCurrency))
+        }).catch(() => {})
+      }
       if (toastMsg) get().showToast(toastMsg, '💸')
       else if (!quiet) get().showToast('同步完成', '☁️')
     } catch (e) {

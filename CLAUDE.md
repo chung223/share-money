@@ -16,6 +16,8 @@
   - 看誰在用：`curl -H "Authorization: Bearer $ADMIN_TOKEN" https://spilt.chung.men/api/admin/ai`
   - 開通／停用：`curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"accountId":"<id>","allow":true,"note":"朋友"}' https://spilt.chung.men/api/admin/ai`
 - LINE bot：`server/src/line.ts`；.env 需 `LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN`（沒設就整組停用，前端設定頁不顯示）。Webhook URL `https://spilt.chung.men/api/line/webhook`（走寶塔 /api/ 反代，簽章驗證）。使用者在設定頁拿連結碼→傳「連結 XXXXXX」給 bot 綁到帳號（`line_links`）；之後傳文字/圖片進 `line_drafts` 收件匣，`/api/sync` 回 `lineDrafts`，App 處理後 `/api/line/ack`。圖片若站方 AI 可用會先在伺服器解析成品項。「我轉了」若連結且開啟 push_enabled 會用 LINE Push（吃官方帳號額度）。
+- LINE 互動：Rich Menu 由 `server/src/richmenu.ts` 產生並註冊（改了要重跑：`cd server && FONTCONFIG_FILE=/www/banban-data/fonts/fonts.conf node --no-warnings=ExperimentalWarning src/richmenu.ts`）；訊息模板在 `server/src/lineMessages.ts`（Flex、Quick Reply）；postback `inbox`/`balances`/`help`/`ack:<id>`。群組：只理會 @bot 或「반반」開頭。摘要：使用者在設定頁開 `summaryEnabled` 後，App 每次同步把 personBalances 明文摘要 POST `/api/line/summary`（存 `line_summaries`）；`weeklyEnabled` 則每週一 09:00 台北由 `runWeekly()`（index.ts 每小時呼叫）push。
+- 梗圖：`server/src/meme.ts`（MiniMax image-01 + sharp 疊字），`POST /api/meme`（算 3 次 AI 額度）→ `/api/meme/<id>.png`（公開、7 天清），圖存 `/www/banban-data/memes/`。
 - 推播：VAPID 金鑰也在 `/www/banban-data/.env`；SW 是 `src/sw.ts`（injectManifest，被 tsconfig exclude，靠 vite build 編譯）。
 - 更新：`deploy/update.sh`。備份：`deploy/backup-db.sh`（cron 04:15，`/www/my_www_backup/banban/`）。
 - 寶塔會把 immutable 的 `.user.ini` 丟進 `dist/`，Vite 清 dist 會失敗；update.sh 已處理。

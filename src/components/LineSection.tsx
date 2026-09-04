@@ -8,7 +8,14 @@ export default function LineSection() {
   const [st, setSt] = useState<LineStatus | null | 'loading'>('loading')
   const [code, setCode] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const refresh = () => lineApi.status().then(setSt).catch(() => setSt(null))
+  const refresh = () =>
+    lineApi
+      .status()
+      .then((v) => {
+        setSt(v)
+        if (v) localStorage.setItem('banban:lineSummary', v.linked && v.summaryEnabled ? '1' : '0')
+      })
+      .catch(() => setSt(null))
   useEffect(() => {
     refresh()
   }, [cfg?.secret])
@@ -41,9 +48,31 @@ export default function LineSection() {
           </div>
           <label className="row gap-s center small">
             <input type="checkbox" checked={st.pushEnabled} disabled={busy} onChange={(e) => run(() => lineApi.setPush(e.target.checked))} />
-            朋友按「我轉了」時用 LINE 通知我（會用到官方帳號的免費訊息額度）
+            朋友按「我轉了」時用 LINE 通知我（吃官方帳號的免費推播額度）
           </label>
-          <button type="button" className="btn btn--ghost btn--sm btn--danger-text center-self" disabled={busy} onClick={() => run(() => lineApi.unlink(), '已解除連結')}>
+          <label className="row gap-s center small">
+            <input
+              type="checkbox"
+              checked={st.summaryEnabled}
+              disabled={busy}
+              onChange={(e) =>
+                run(async () => {
+                  await lineApi.settings({ summaryEnabled: e.target.checked })
+                  localStorage.setItem('banban:lineSummary', e.target.checked ? '1' : '0')
+                  if (e.target.checked) useStore.getState().syncNow({ quiet: true })
+                })
+              }
+            />
+            把「誰欠我多少」摘要同步給 bot（<b>明文</b>：只有名字、金額、帳本名；bot 選單「誰欠我」才會有內容）
+          </label>
+          {st.summaryEnabled && (
+            <label className="row gap-s center small">
+              <input type="checkbox" checked={st.weeklyEnabled} disabled={busy} onChange={(e) => run(() => lineApi.settings({ weeklyEnabled: e.target.checked }))} />
+              每週一早上 9 點用 LINE 提醒我誰還沒還（一週一則推播）
+            </label>
+          )}
+          <p className="muted small">bot 底下有選單：📥 收件匣、💰 誰欠我、開 App、說明。群組裡也能用：把 bot 拉進群，打「반반 拉麵 900 我付」或 @它。</p>
+          <button type="button" className="btn btn--ghost btn--sm btn--danger-text center-self" disabled={busy} onClick={() => run(async () => { await lineApi.unlink(); localStorage.setItem('banban:lineSummary', '0') }, '已解除連結')}>
             解除連結
           </button>
         </div>

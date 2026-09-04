@@ -7,6 +7,8 @@ import { createApp } from './app.ts'
 import { normalise } from './ai.ts'
 import { createLineClient } from './line.ts'
 import { createHmac } from 'node:crypto'
+import sharp from 'sharp'
+const sharpPng: Buffer = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#fff7f0' } }).png().toBuffer()
 
 const T0 = 1_700_000_000_000
 function setup(t0 = T0) {
@@ -37,7 +39,7 @@ function setup(t0 = T0) {
       return new Response('{}', { status: 200 })
     }) as unknown as typeof fetch,
   })
-  const { app, purgeExpired, purgeInactive } = createApp({
+  const { app, purgeExpired, purgeInactive, runWeekly } = createApp({
     db, now: () => t, adminToken: 'admin-secret', inactiveDays: 30, push, publicOrigin: 'https://example.test', shareHtml,
     renderOgImage: async (i) => Buffer.from('PNG:' + i.title),
     ai: { enabled: true, parse: async (input) => { aiCalls.push(input); return { items: [{ name: '牛肉麵', qty: 1, price: 180 }], extras: [], total: 180, date: null, currency: 'TWD', merchant: null } }, chat: async (input) => { aiCalls.push(input); return 'echo:' + input.user } },
@@ -45,6 +47,8 @@ function setup(t0 = T0) {
     aiGlobalDaily: 3,
     aiInviteCode: 'friends-only',
     line,
+    imageGen: { enabled: true, generate: async () => sharpPng },
+    memeDir: join(tmpdir(), `banban-memes-${process.pid}`),
     byokFetch: (async (url: string | URL | Request, init?: RequestInit) => {
       byokCalls.push({ url: String(url), auth: (init?.headers as Record<string, string>)?.authorization ?? (init?.headers as Record<string, string>)?.['x-api-key'] })
       return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[{"name":"byok","qty":1,"price":9}]}' } }] }), { status: 200 })
@@ -52,7 +56,7 @@ function setup(t0 = T0) {
   })
   const call = (path: string, init: RequestInit = {}, token?: string, ip = '1.2.3.4') =>
     app.request(path, { ...init, headers: { 'content-type': 'application/json', 'x-forwarded-for': ip, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } })
-  return { call, tick: (ms: number) => (t += ms), purgeExpired, purgeInactive, sent, dead, aiCalls, byokCalls, lineOut }
+  return { call, tick: (ms: number) => (t += ms), setTime: (ms: number) => (t = ms), purgeExpired, purgeInactive, runWeekly, sent, dead, aiCalls, byokCalls, lineOut }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function body(r: Response | Promise<Response>): Promise<any> {
@@ -374,5 +378,75 @@ describe('LINE bot', () => {
     await call('/api/line/link', { method: 'DELETE' }, A)
     expect((await body(call('/api/line/status', {}, A))).linked).toBe(false)
     tick(1)
+  })
+})
+
+describe('LINE bot interactions', () => {
+  const sig = (body: string) => createHmac('sha256', 'secret').update(body).digest('base64')
+  const hook = (call: ReturnType<typeof setup>['call'], events: unknown[]) => {
+    const body = JSON.stringify({ destination: 'x', events })
+    return call('/api/line/webhook', { method: 'POST', body, headers: { 'x-line-signature': sig(body) } })
+  }
+  const link = async (call: ReturnType<typeof setup>['call'], userId: string, token: string) => {
+    const { code } = await body(call('/api/line/link-code', post({}), token))
+    await hook(call, [{ type: 'message', replyToken: 'r', source: { type: 'user', userId }, message: { type: 'text', id: 'x', text: `連結 ${code}` } }])
+    await new Promise((r) => setTimeout(r, 20))
+  }
+  it('receipt flex + postback ack, inbox postback, group mentions, summary + weekly push', async () => {
+    const { call, lineOut, runWeekly, setTime } = setup()
+    await link(call, 'U1', A)
+    await call('/api/ai/redeem', post({ code: 'friends-only' }), A)
+    // image -> flex with ack button
+    await hook(call, [{ type: 'message', replyToken: 'r1', source: { type: 'user', userId: 'U1' }, message: { type: 'image', id: '9' } }])
+    await new Promise((r) => setTimeout(r, 30))
+    const flex = lineOut.at(-1)!.body as { messages: { type: string; contents?: unknown }[] }
+    expect(flex.messages[0].type).toBe('flex')
+    expect(JSON.stringify(flex.messages[0].contents)).toContain('ack:')
+    const id = Number(/ack:(\d+)/.exec(JSON.stringify(flex.messages[0].contents))![1])
+    // postback inbox lists it; ack clears it
+    await hook(call, [{ type: 'postback', replyToken: 'r2', source: { type: 'user', userId: 'U1' }, postback: { data: 'inbox' } }])
+    await new Promise((r) => setTimeout(r, 20))
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('收件匣 1 筆')
+    await hook(call, [{ type: 'postback', replyToken: 'r3', source: { type: 'user', userId: 'U1' }, postback: { data: `ack:${id}` } }])
+    await new Promise((r) => setTimeout(r, 20))
+    expect((await body(call('/api/sync', {}, A))).lineDrafts).toEqual([])
+    // group: ignored unless mentioned / prefixed
+    await hook(call, [{ type: 'message', replyToken: 'r4', source: { type: 'group', userId: 'U1', groupId: 'G1' }, message: { type: 'text', id: '1', text: '大家午餐吃什麼' } }])
+    await hook(call, [{ type: 'message', replyToken: 'r5', source: { type: 'group', userId: 'U1', groupId: 'G1' }, message: { type: 'text', id: '2', text: '반반 拉麵 900 我付' } }])
+    await hook(call, [{ type: 'message', replyToken: 'r6', source: { type: 'group', userId: 'U2', groupId: 'G1' }, message: { type: 'text', id: '3', text: '@반반 計程車 300', mention: { mentionees: [{ isSelf: true, index: 0, length: 3 }] } } }])
+    await new Promise((r) => setTimeout(r, 40))
+    const drafts = (await body(call('/api/sync', {}, A))).lineDrafts
+    expect(drafts.map((d: { payload: { text: string } }) => d.payload.text)).toEqual(['拉麵 900 我付'])
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('還沒綁帳號') // U2 not linked
+    // summary: disabled -> 400; enable -> upload -> balances postback shows it
+    expect((await call('/api/line/summary', post({ items: [{ name: '小明', amount: 250 }] }), A)).status).toBe(400)
+    await call('/api/line/settings', post({ summaryEnabled: true, weeklyEnabled: true }), A)
+    expect((await body(call('/api/line/summary', post({ items: [{ name: '小明', amount: 250, projects: ['拉麵'] }, { name: '小華', amount: 0 }], currency: 'TWD' }), A))).items).toBe(1)
+    await hook(call, [{ type: 'postback', replyToken: 'r7', source: { type: 'user', userId: 'U1' }, postback: { data: 'balances' } }])
+    await new Promise((r) => setTimeout(r, 20))
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('小明')
+    // weekly: only Monday 09:00 Taipei
+    setTime(Date.UTC(2026, 8, 7, 1, 30)) // 2026-09-07 is Monday, 09:30 Taipei
+    expect(await runWeekly()).toBe(1)
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('週一提醒')
+    expect(await runWeekly()).toBe(0) // already sent this week
+    setTime(Date.UTC(2026, 8, 8, 1, 30)) // Tuesday
+    expect(await runWeekly()).toBe(0)
+    // turning summary off deletes the stored summary
+    await call('/api/line/settings', post({ summaryEnabled: false }), A)
+    await hook(call, [{ type: 'postback', replyToken: 'r8', source: { type: 'user', userId: 'U1' }, postback: { data: 'balances' } }])
+    await new Promise((r) => setTimeout(r, 20))
+    expect(JSON.stringify(lineOut.at(-1)!.body)).toContain('催款摘要同步')
+  })
+})
+
+describe('meme', () => {
+  it('needs AI permission and enough quota', async () => {
+    const { call } = setup()
+    expect((await call('/api/meme', post({ name: '小明', amountText: 'NT$250' }), A)).status).toBe(403)
+    await call('/api/ai/redeem', post({ code: 'friends-only' }), A)
+    // quota is 2 in tests and a meme costs 3 -> refused
+    expect((await call('/api/meme', post({ name: '小明', amountText: 'NT$250', mood: 'angry' }), A)).status).toBe(429)
+    expect((await call('/api/meme/nope.png')).status).toBe(404)
   })
 })

@@ -5,6 +5,7 @@ import { createApp, type PushSender } from './app.ts'
 import webpush from 'web-push'
 import { createAiParser } from './ai.ts'
 import { createLineClient } from './line.ts'
+import { createMiniMaxImageGen } from './meme.ts'
 
 const PORT = Number(process.env.PORT ?? 3456)
 const DATA_DIR = process.env.DATA_DIR ?? join(import.meta.dirname, '..', 'data')
@@ -14,6 +15,7 @@ const INACTIVE_DAYS = Number(process.env.INACTIVE_DAYS ?? 180)
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN ?? CORS_ORIGIN ?? `http://127.0.0.1:${PORT}`
 const SHARE_HTML = process.env.SHARE_HTML ?? join(import.meta.dirname, '..', '..', 'dist', 's', 'index.html')
 
+const imageGen = createMiniMaxImageGen({ apiKey: process.env.MINIMAX_API_KEY, baseUrl: process.env.MINIMAX_BASE_URL })
 const line = createLineClient({ channelSecret: process.env.LINE_CHANNEL_SECRET, accessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN })
 if (!line.enabled) console.warn('LINE_CHANNEL_SECRET / LINE_CHANNEL_ACCESS_TOKEN not set: LINE bot disabled')
 
@@ -41,13 +43,14 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
 } else console.warn('VAPID keys not set: push disabled')
 
 const db = openDb(join(DATA_DIR, 'banban.db'))
-const { app, purgeExpired, purgeInactive } = createApp({ db, corsOrigin: CORS_ORIGIN, adminToken: ADMIN_TOKEN, inactiveDays: INACTIVE_DAYS, push, publicOrigin: PUBLIC_ORIGIN, shareHtml: SHARE_HTML, ai, aiDailyQuota: Number(process.env.AI_DAILY_QUOTA ?? 40), aiGlobalDaily: Number(process.env.AI_GLOBAL_DAILY ?? 300), aiInviteCode: process.env.AI_INVITE_CODE || undefined, aiOpen: process.env.AI_OPEN === '1', line })
+const { app, purgeExpired, purgeInactive, runWeekly } = createApp({ db, corsOrigin: CORS_ORIGIN, adminToken: ADMIN_TOKEN, inactiveDays: INACTIVE_DAYS, push, publicOrigin: PUBLIC_ORIGIN, shareHtml: SHARE_HTML, ai, aiDailyQuota: Number(process.env.AI_DAILY_QUOTA ?? 40), aiGlobalDaily: Number(process.env.AI_GLOBAL_DAILY ?? 300), aiInviteCode: process.env.AI_INVITE_CODE || undefined, aiOpen: process.env.AI_OPEN === '1', line, imageGen, memeDir: join(DATA_DIR, 'memes') })
 
 // 每小時：清過期一週以上的分享連結；刪 INACTIVE_DAYS 天沒同步的帳號（連同資料與分享）
 const housekeeping = () => {
   purgeExpired()
   const n = purgeInactive()
   if (n) console.log(`purged ${n} inactive account(s)`)
+  runWeekly().then((k) => k && console.log(`weekly LINE reminders sent: ${k}`)).catch((e) => console.error('weekly failed', e))
 }
 setInterval(housekeeping, 3_600_000).unref()
 housekeeping()

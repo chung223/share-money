@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { navigate } from '../router'
 import { computeSplit, fmtMoney } from '../lib/split'
@@ -94,6 +94,17 @@ export default function Home() {
   const [quick, setQuick] = useState(false)
   const lineDrafts = useStore((s) => s.lineDrafts)
   const [inbox, setInbox] = useState(false)
+  // LINE bot 的按鈕會帶 #/inbox、#/balances 進來
+  useEffect(() => {
+    const h = location.hash
+    if (h.startsWith('#/inbox')) {
+      setInbox(true)
+      history.replaceState(null, '', '#/')
+    } else if (h.startsWith('#/balances')) {
+      setBalances(true)
+      history.replaceState(null, '', '#/')
+    }
+  }, [])
   const ai = useAiAvailable()
   const create = (groupId?: string, category?: Category) => {
     setPick(false)

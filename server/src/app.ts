@@ -6,6 +6,8 @@ import { readFileSync, statSync } from 'node:fs'
 import { renderOg } from './og.ts'
 import type { AiParser } from './ai.ts'
 import { LINE_HELP, type LineClient } from './line.ts'
+import { composeMeme, memePrompt, memeStore, MEME_LINES, type ImageGen, type Mood } from './meme.ts'
+import { HELP_QR, inboxText, quickReply, receiptFlex, summaryFlex, textDraftReply, textMsg, weeklyText, type Summary } from './lineMessages.ts'
 import { callChat, callProvider, isPublicHttpsUrl, type AiFormat } from '../../src/lib/receiptAi.ts'
 
 export interface AppOptions {
@@ -36,6 +38,9 @@ export interface AppOptions {
   byokFetch?: typeof fetch
   /** LINE Messaging API client; `enabled: false` = webhook returns 404. */
   line?: LineClient
+  /** 梗圖：AI 底圖產生器＋存放目錄 */
+  imageGen?: ImageGen
+  memeDir?: string
   /** Test hook: replace the PNG renderer. */
   renderOgImage?: (i: { title: string; subtitle: string; mood?: 'happy' | 'wow' | 'sleepy' }) => Promise<Buffer>
 }
@@ -97,7 +102,7 @@ function makeLimiter(limit: number, windowMs: number, now: () => number) {
 
 type Vars = { accountId: string }
 
-export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40, aiGlobalDaily = 300, aiInviteCode, aiOpen = false, byokFetch, line }: AppOptions) {
+export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, inactiveDays = 180, push, publicOrigin = '', shareHtml, renderOgImage = renderOg, ai, aiDailyQuota = 40, aiGlobalDaily = 300, aiInviteCode, aiOpen = false, byokFetch, line, imageGen, memeDir }: AppOptions) {
   const app = new Hono<{ Variables: Vars }>()
   const q = {
     accountByHash: db.raw.prepare('SELECT id FROM accounts WHERE token_hash = ?'),
@@ -138,15 +143,23 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     tripDelete: db.raw.prepare('DELETE FROM trips WHERE id = ?'),
     tripPurge: db.raw.prepare('DELETE FROM trips WHERE last_seen_at < ?'),
     tripCount: db.raw.prepare('SELECT COUNT(*) AS n FROM trips'),
-    lineByUser: db.raw.prepare('SELECT account_id, display_name, push_enabled FROM line_links WHERE line_user_id = ?'),
-    lineByAccount: db.raw.prepare('SELECT line_user_id, display_name, push_enabled, created_at FROM line_links WHERE account_id = ?'),
+    lineByUser: db.raw.prepare('SELECT account_id, display_name, push_enabled, summary_enabled FROM line_links WHERE line_user_id = ?'),
+    lineByAccount: db.raw.prepare('SELECT line_user_id, display_name, push_enabled, summary_enabled, weekly_enabled, created_at FROM line_links WHERE account_id = ?'),
+    lineSetSettings: db.raw.prepare('UPDATE line_links SET push_enabled = ?, summary_enabled = ?, weekly_enabled = ? WHERE account_id = ?'),
+    lineSummaryPut: db.raw.prepare('INSERT INTO line_summaries (account_id, payload, updated_at) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at'),
+    lineSummaryGet: db.raw.prepare('SELECT payload, updated_at FROM line_summaries WHERE account_id = ?'),
+    lineSummaryDelete: db.raw.prepare('DELETE FROM line_summaries WHERE account_id = ?'),
+    lineWeeklyDue: db.raw.prepare('SELECT l.line_user_id, l.account_id, s.payload FROM line_links l JOIN line_summaries s ON s.account_id = l.account_id WHERE l.weekly_enabled = 1 AND l.summary_enabled = 1 AND l.last_weekly_at < ?'),
+    lineWeeklyMark: db.raw.prepare('UPDATE line_links SET last_weekly_at = ? WHERE account_id = ?'),
+    lineMemberSeen: db.raw.prepare('INSERT INTO line_group_members (group_id, user_id, display_name, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT(group_id, user_id) DO UPDATE SET display_name = COALESCE(excluded.display_name, line_group_members.display_name), last_seen_at = excluded.last_seen_at'),
     lineLink: db.raw.prepare('INSERT INTO line_links (line_user_id, account_id, display_name, push_enabled, created_at) VALUES (?, ?, ?, 1, ?) ON CONFLICT(line_user_id) DO UPDATE SET account_id = excluded.account_id, display_name = excluded.display_name, created_at = excluded.created_at'),
     lineUnlink: db.raw.prepare('DELETE FROM line_links WHERE account_id = ?'),
     lineSetPush: db.raw.prepare('UPDATE line_links SET push_enabled = ? WHERE account_id = ?'),
     lineCodeInsert: db.raw.prepare('INSERT INTO line_link_codes (code, account_id, expires_at) VALUES (?, ?, ?)'),
     lineCodeGet: db.raw.prepare('SELECT account_id, expires_at FROM line_link_codes WHERE code = ?'),
     lineCodeDelete: db.raw.prepare('DELETE FROM line_link_codes WHERE code = ? OR expires_at < ?'),
-    lineDraftInsert: db.raw.prepare('INSERT INTO line_drafts (account_id, kind, payload, created_at) VALUES (?, ?, ?, ?)'),
+    lineDraftInsert: db.raw.prepare('INSERT INTO line_drafts (account_id, kind, payload, created_at, origin) VALUES (?, ?, ?, ?, ?)'),
+    lineDraftLast: db.raw.prepare('SELECT id FROM line_drafts WHERE account_id = ? ORDER BY id DESC LIMIT 1'),
     lineDraftsPending: db.raw.prepare('SELECT id, kind, payload, created_at FROM line_drafts WHERE account_id = ? AND consumed = 0 ORDER BY id LIMIT 50'),
     lineDraftCount: db.raw.prepare('SELECT COUNT(*) AS n FROM line_drafts WHERE account_id = ? AND consumed = 0'),
     lineDraftAck: db.raw.prepare('UPDATE line_drafts SET consumed = 1 WHERE id = ? AND account_id = ?'),
@@ -598,13 +611,47 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
         .catch((e) => console.error('push failed', e))
     }
   }
+  // --- 催款梗圖（吃 AI 額度；圖公開但 id 不可猜，7 天後清） ---
+  const memes = memeDir ? memeStore(memeDir) : null
+  app.post('/api/meme', async (c) => {
+    if (!imageGen?.enabled || !memes) return c.json({ error: 'meme_disabled' }, 404)
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    if (!aiAllowedFor(accountId)) return c.json({ error: 'not_allowed' }, 403)
+    const st = aiStatusFor(accountId)
+    if (st.remaining <= 2) return c.json({ error: 'quota' }, 429) // 生圖算 3 次
+    const body = await c.req.json().catch(() => null)
+    const mood: Mood = ['cute', 'angry', 'sad', 'party'].includes(body?.mood) ? body.mood : 'cute'
+    const name = typeof body?.name === 'string' ? body.name : ''
+    const amountText = typeof body?.amountText === 'string' ? body.amountText : ''
+    if (!name || !amountText) return c.json({ error: 'bad_request' }, 400)
+    const line = typeof body?.line === 'string' && body.line.trim() ? body.line : MEME_LINES[mood][Math.floor(Math.random() * MEME_LINES[mood].length)]
+    for (let i = 0; i < 3; i++) q.aiBump.run(accountId, dayOf())
+    try {
+      const base = await imageGen.generate(memePrompt(mood))
+      const png = await composeMeme(base, { name, amountText, line })
+      const id = memes.save(png)
+      return c.json({ id, url: `${publicOrigin}/api/meme/${id}.png` })
+    } catch (e) {
+      console.error('meme failed', (e as Error).message?.slice(0, 160))
+      return c.json({ error: 'meme_failed', message: (e as Error).message?.slice(0, 160) }, 502)
+    }
+  })
+  app.get('/api/meme/:file', (c) => {
+    if (!memes) return c.json({ error: 'not_found' }, 404)
+    const id = c.req.param('file').replace(/\.png$/, '')
+    const buf = memes.read(id)
+    if (!buf) return c.json({ error: 'not_found' }, 404)
+    return c.body(new Uint8Array(buf), 200, { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' })
+  })
+
   // --- LINE 機器人：連結碼、webhook、收件匣 ---
   const lineCodeLimiter = makeLimiter(20, 3_600_000, now)
   app.get('/api/line/status', (c) => {
     const accountId = requireAuth(c)
     if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
-    const l = q.lineByAccount.get(accountId) as { line_user_id: string; display_name: string | null; push_enabled: number; created_at: number } | undefined
-    return c.json({ available: !!line?.enabled, linked: !!l, displayName: l?.display_name ?? null, pushEnabled: !!l?.push_enabled, pending: (q.lineDraftCount.get(accountId) as { n: number }).n })
+    const l = q.lineByAccount.get(accountId) as { line_user_id: string; display_name: string | null; push_enabled: number; summary_enabled: number; weekly_enabled: number; created_at: number } | undefined
+    return c.json({ available: !!line?.enabled, linked: !!l, displayName: l?.display_name ?? null, pushEnabled: !!l?.push_enabled, summaryEnabled: !!l?.summary_enabled, weeklyEnabled: !!l?.weekly_enabled, pending: (q.lineDraftCount.get(accountId) as { n: number }).n })
   })
   app.post('/api/line/link-code', (c) => {
     if (!line?.enabled) return c.json({ error: 'line_disabled' }, 404)
@@ -631,6 +678,34 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     q.lineSetPush.run(body?.enabled ? 1 : 0, accountId)
     return c.json({ ok: true })
   })
+  app.post('/api/line/settings', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const body = await c.req.json().catch(() => null)
+    const l = q.lineByAccount.get(accountId) as { push_enabled: number; summary_enabled: number; weekly_enabled: number } | undefined
+    if (!l) return c.json({ error: 'not_linked' }, 400)
+    const pick = (k: string, cur: number) => (typeof body?.[k] === 'boolean' ? (body[k] ? 1 : 0) : cur)
+    const summary = pick('summaryEnabled', l.summary_enabled)
+    q.lineSetSettings.run(pick('pushEnabled', l.push_enabled), summary, summary ? pick('weeklyEnabled', l.weekly_enabled) : 0, accountId)
+    if (!summary) q.lineSummaryDelete.run(accountId)
+    return c.json({ ok: true })
+  })
+  /** App 端上傳「誰欠我」明文摘要（使用者選擇性開啟）。 */
+  app.post('/api/line/summary', async (c) => {
+    const accountId = requireAuth(c)
+    if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
+    const l = q.lineByAccount.get(accountId) as { summary_enabled: number } | undefined
+    if (!l?.summary_enabled) return c.json({ error: 'summary_disabled' }, 400)
+    const body = await c.req.json().catch(() => null)
+    if (!body || !Array.isArray(body.items)) return c.json({ error: 'bad_request' }, 400)
+    const items = (body.items as unknown[]).slice(0, 50).map((it) => {
+      const o = it as { name?: unknown; amount?: unknown; currency?: unknown; projects?: unknown }
+      return { name: String(o.name ?? '').slice(0, 30), amount: Number(o.amount) || 0, currency: /^[A-Z]{3}$/.test(String(o.currency)) ? String(o.currency) : 'TWD', projects: Array.isArray(o.projects) ? (o.projects as unknown[]).slice(0, 5).map((x) => String(x).slice(0, 30)) : [] }
+    }).filter((it) => it.name && it.amount > 0)
+    const summary: Summary = { items, total: Math.round(items.reduce((a, it) => a + it.amount, 0) * 100) / 100, currency: /^[A-Z]{3}$/.test(String(body.currency)) ? String(body.currency) : 'TWD', updatedAt: now() }
+    q.lineSummaryPut.run(accountId, JSON.stringify(summary), now())
+    return c.json({ ok: true, items: items.length })
+  })
   app.post('/api/line/ack', async (c) => {
     const accountId = requireAuth(c)
     if (!accountId || accountId === RATE_LIMITED) return authFail(c, accountId)
@@ -656,59 +731,124 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
   interface LineEvent {
     type: string
     replyToken?: string
-    source?: { type: string; userId?: string; groupId?: string }
-    message?: { type: string; id: string; text?: string }
+    source?: { type: string; userId?: string; groupId?: string; roomId?: string }
+    message?: { type: string; id: string; text?: string; mention?: { mentionees?: { isSelf?: boolean; index: number; length: number }[] } }
+    postback?: { data: string }
   }
-  const APP_URL = publicOrigin || 'https://spilt.chung.men'
-  const draftReply = (n: number, what: string) => [{ type: 'text', text: `收到${what}！已放進你的 LINE 收件匣（${n} 筆待處理）。打開 App 一鍵建帳本 👉 ${APP_URL}` }]
+  const pendingOf = (accountId: string) => (q.lineDraftCount.get(accountId) as { n: number }).n
+  const summaryOf = (accountId: string): Summary | null => {
+    const row = q.lineSummaryGet.get(accountId) as { payload: string } | undefined
+    if (!row) return null
+    try {
+      return JSON.parse(row.payload) as Summary
+    } catch {
+      return null
+    }
+  }
+  const BOT_NAMES = /^\s*@?(?:반반|banban|半半)\s*/i
   async function handleLineEvent(ev: LineEvent) {
     if (!line) return
     const userId = ev.source?.userId
-    if (ev.type === 'follow' && ev.replyToken) return line.reply(ev.replyToken, [{ type: 'text', text: LINE_HELP }])
-    if (ev.type !== 'message' || !ev.message || !ev.replyToken || !userId) return
-    // 群組裡只處理有 @ 我或「連結」的訊息？先簡化：群組訊息一律忽略，只處理一對一
-    if (ev.source?.type !== 'user') return
-    const linked = q.lineByUser.get(userId) as { account_id: string } | undefined
+    const chatId = ev.source?.groupId ?? ev.source?.roomId
+    const inGroup = ev.source?.type === 'group' || ev.source?.type === 'room'
+    if (ev.type === 'follow' && ev.replyToken) return line.reply(ev.replyToken, [textMsg(LINE_HELP, HELP_QR)])
+    if (ev.type === 'join' && ev.replyToken) return line.reply(ev.replyToken, [textMsg('大家好，我是 반반 分帳小幫手 🐥\n在群裡 @반반 加一句話或直接傳「반반 拉麵 900 我付」，我就把它記到你的 App 收件匣。要先私訊我「連結 XXXXXX」綁帳號喔！')])
+    if (!ev.replyToken || !userId) return
+    const linked = q.lineByUser.get(userId) as { account_id: string; summary_enabled: number } | undefined
+    if (inGroup && chatId) {
+      // 記住群裡互動過的人（免費），之後用來對名字
+      line.getProfile(userId).then((p) => q.lineMemberSeen.run(chatId, userId, p?.displayName ?? null, now())).catch(() => {})
+    }
+
+    if (ev.type === 'postback' && ev.postback) {
+      const data = ev.postback.data
+      if (data === 'help') return line.reply(ev.replyToken, [textMsg(LINE_HELP, HELP_QR)])
+      if (!linked) return line.reply(ev.replyToken, [textMsg('先私訊我「連結 XXXXXX」綁帳號（連結碼在 App 設定頁）。', HELP_QR)])
+      if (data === 'inbox') return line.reply(ev.replyToken, [inboxText(pendingOf(linked.account_id), q.lineDraftsPending.all(linked.account_id) as { kind: string; payload: string }[])])
+      if (data === 'balances') return line.reply(ev.replyToken, [summaryFlex(linked.summary_enabled ? summaryOf(linked.account_id) : null)])
+      const ack = /^ack:(\d+)$/.exec(data)
+      if (ack) {
+        q.lineDraftAck.run(Number(ack[1]), linked.account_id)
+        return line.reply(ev.replyToken, [textMsg(`已略過。收件匣還有 ${pendingOf(linked.account_id)} 筆。`, HELP_QR)])
+      }
+      return
+    }
+    if (ev.type !== 'message' || !ev.message) return
     const m = ev.message
+
     if (m.type === 'text') {
-      const text = (m.text ?? '').trim()
+      let text = (m.text ?? '').trim()
+      if (inGroup) {
+        // 群組裡只理會 @我 或以「반반」開頭的訊息
+        const mentioned = !!m.mention?.mentionees?.some((x) => x.isSelf)
+        if (!mentioned && !BOT_NAMES.test(text)) return
+        text = text.replace(/@\S+\s*/g, '').replace(BOT_NAMES, '').trim()
+        if (!text) return line.reply(ev.replyToken, [textMsg('叫我了嗎？後面接一句話，例如「반반 拉麵 900 我付」，或私訊我傳收據照片。')])
+      }
       const code = /^(?:連結|link)\s*([A-Za-z0-9]{6})$/i.exec(text)?.[1]?.toUpperCase()
       if (code) {
+        if (inGroup) return line.reply(ev.replyToken, [textMsg('連結碼請私訊我，不要在群裡貼 🙈')])
         const row = q.lineCodeGet.get(code) as { account_id: string; expires_at: number } | undefined
-        if (!row || row.expires_at < now()) return line.reply(ev.replyToken, [{ type: 'text', text: '這組連結碼無效或過期了，到 App 設定頁再拿一組（15 分鐘內有效）。' }])
+        if (!row || row.expires_at < now()) return line.reply(ev.replyToken, [textMsg('這組連結碼無效或過期了，到 App 設定頁再拿一組（15 分鐘內有效）。')])
         const prof = await line.getProfile(userId)
         q.lineLink.run(userId, row.account_id, prof?.displayName ?? null, now())
         q.lineCodeDelete.run(code, now())
-        return line.reply(ev.replyToken, [{ type: 'text', text: `連結好了，${prof?.displayName ?? '你好'}！以後直接傳收據照片或一句話給我，我幫你變成帳本草稿 ✨` }])
+        return line.reply(ev.replyToken, [textMsg(`連結好了，${prof?.displayName ?? '你好'}！以後直接傳收據照片或一句話給我，我幫你變成帳本草稿 ✨\n下面的選單也可以用。`, HELP_QR)])
       }
-      if (!linked) return line.reply(ev.replyToken, [{ type: 'text', text: LINE_HELP }])
-      if (/^(help|說明|幫助|\?)$/i.test(text)) return line.reply(ev.replyToken, [{ type: 'text', text: LINE_HELP }])
-      if ((q.lineDraftCount.get(linked.account_id) as { n: number }).n >= 50) return line.reply(ev.replyToken, [{ type: 'text', text: '收件匣滿了（50 筆），先到 App 處理一下吧。' }])
-      q.lineDraftInsert.run(linked.account_id, 'text', JSON.stringify({ text: text.slice(0, 2000) }), now())
-      return line.reply(ev.replyToken, draftReply((q.lineDraftCount.get(linked.account_id) as { n: number }).n, '一句話'))
+      if (!linked) return line.reply(ev.replyToken, [textMsg(inGroup ? '你還沒綁帳號，先私訊我「連結 XXXXXX」（連結碼在 App 設定頁）。' : LINE_HELP, HELP_QR)])
+      if (/^(help|說明|幫助|\?|？)$/i.test(text)) return line.reply(ev.replyToken, [textMsg(LINE_HELP, HELP_QR)])
+      if (/^(收件匣|inbox)$/i.test(text)) return line.reply(ev.replyToken, [inboxText(pendingOf(linked.account_id), q.lineDraftsPending.all(linked.account_id) as { kind: string; payload: string }[])])
+      if (/^(誰欠我|餘額|balances?)$/i.test(text)) return line.reply(ev.replyToken, [summaryFlex(linked.summary_enabled ? summaryOf(linked.account_id) : null)])
+      if (pendingOf(linked.account_id) >= 50) return line.reply(ev.replyToken, [textMsg('收件匣滿了（50 筆），先到 App 處理一下吧。', HELP_QR)])
+      q.lineDraftInsert.run(linked.account_id, 'text', JSON.stringify({ text: text.slice(0, 2000), group: inGroup ? chatId : undefined }), now(), inGroup ? 'group' : 'user')
+      const id = (q.lineDraftLast.get(linked.account_id) as { id: number }).id
+      return line.reply(ev.replyToken, [textDraftReply(text, id, pendingOf(linked.account_id))])
     }
     if (m.type === 'image') {
-      if (!linked) return line.reply(ev.replyToken, [{ type: 'text', text: '先連結帳號我才能幫你存收據喔～\n' + LINE_HELP }])
-      if ((q.lineDraftCount.get(linked.account_id) as { n: number }).n >= 50) return line.reply(ev.replyToken, [{ type: 'text', text: '收件匣滿了（50 筆），先到 App 處理一下吧。' }])
+      if (inGroup) return // 群裡的圖片不處理（會太吵），私訊才收
+      if (!linked) return line.reply(ev.replyToken, [textMsg('先連結帳號我才能幫你存收據喔～\n' + LINE_HELP, HELP_QR)])
+      if (pendingOf(linked.account_id) >= 50) return line.reply(ev.replyToken, [textMsg('收件匣滿了（50 筆），先到 App 處理一下吧。', HELP_QR)])
       const img = await line.getContent(m.id)
-      if (!img) return line.reply(ev.replyToken, [{ type: 'text', text: '圖片抓不下來，再傳一次試試。' }])
-      // 站方 AI 有開就先解析成品項，不然把圖存起來讓 App 端辨識
+      if (!img) return line.reply(ev.replyToken, [textMsg('圖片抓不下來，再傳一次試試。')])
       let payload: Record<string, unknown> = { image: img }
       if (ai?.enabled && aiAllowedFor(linked.account_id)) {
         try {
-          const parsed = await ai.parse({ image: img })
-          payload = { receipt: parsed }
+          payload = { receipt: await ai.parse({ image: img }) }
           q.aiBump.run(linked.account_id, dayOf())
         } catch (e) {
           console.error('line receipt parse failed', (e as Error).message?.slice(0, 120))
         }
       }
-      q.lineDraftInsert.run(linked.account_id, payload.receipt ? 'receipt' : 'image', JSON.stringify(payload), now())
-      const n = (q.lineDraftCount.get(linked.account_id) as { n: number }).n
-      const items = (payload.receipt as { items?: { name: string }[] } | undefined)?.items
-      return line.reply(ev.replyToken, items?.length ? [{ type: 'text', text: `辨識到 ${items.length} 項：${items.slice(0, 4).map((i) => i.name).join('、')}${items.length > 4 ? '…' : ''}\n已放進收件匣（${n} 筆）。打開 App 一鍵建帳本 👉 ${APP_URL}` }] : draftReply(n, '收據'))
+      q.lineDraftInsert.run(linked.account_id, payload.receipt ? 'receipt' : 'image', JSON.stringify(payload), now(), 'user')
+      const id = (q.lineDraftLast.get(linked.account_id) as { id: number }).id
+      const n = pendingOf(linked.account_id)
+      const receipt = payload.receipt as Parameters<typeof receiptFlex>[0] | undefined
+      return line.reply(ev.replyToken, receipt?.items?.length ? [receiptFlex(receipt, id, n)] : [textMsg(`收到收據！已放進收件匣（${n} 筆），到 App 用 AI 辨識後建帳本。`, quickReply([{ label: '去建帳本', uri: 'https://spilt.chung.men/#/inbox' }, { label: '略過', data: `ack:${id}` }]))])
     }
-    return line.reply(ev.replyToken, [{ type: 'text', text: '目前只吃文字和圖片～\n' + LINE_HELP }])
+    if (!inGroup) return line.reply(ev.replyToken, [textMsg('目前只吃文字和圖片～', HELP_QR)])
+  }
+
+  /** 每週一早上 9 點（台北）推「誰欠我」給有開的人。每小時由 index.ts 呼叫一次。 */
+  const runWeekly = async () => {
+    if (!line?.enabled) return 0
+    const t = new Date(now())
+    const taipei = new Date(t.toLocaleString('en-US', { timeZone: 'Asia/Taipei' }))
+    if (taipei.getDay() !== 1 || taipei.getHours() !== 9) return 0
+    const due = q.lineWeeklyDue.all(now() - 6 * 86_400_000) as { line_user_id: string; account_id: string; payload: string }[]
+    let n = 0
+    for (const d of due) {
+      try {
+        const s = JSON.parse(d.payload) as Summary
+        if (s.items.length) {
+          const ok = await line.push(d.line_user_id, [textMsg(weeklyText(s))])
+          if (ok) n++
+        }
+        q.lineWeeklyMark.run(now(), d.account_id)
+      } catch (e) {
+        console.error('weekly push failed', (e as Error).message?.slice(0, 120))
+      }
+    }
+    return n
   }
 
   app.get('/api/push/vapid', (c) => (push ? c.json({ publicKey: push.publicKey }) : c.json({ error: 'not_found' }, 404)))
@@ -752,7 +892,8 @@ export function createApp({ db, corsOrigin, now = () => Date.now(), adminToken, 
     const r = q.purgeInactive.run(now() - inactiveDays * 86_400_000)
     q.tripPurge.run(now() - inactiveDays * 86_400_000)
     q.lineDraftPurge.run(now() - 30 * 86_400_000)
+    memes?.purge(7 * 86_400_000)
     return Number(r.changes)
   }
-  return { app, purgeExpired, purgeInactive }
+  return { app, purgeExpired, purgeInactive, runWeekly }
 }
