@@ -52,6 +52,8 @@ export interface Project {
   /** personId -> paid back to payer */
   settled: Record<Id, boolean>
   note?: string
+  /** Total printed on the receipt, used to reconcile against what was entered. */
+  receiptTotal?: number
 }
 
 export interface AppData {

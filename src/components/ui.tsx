@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { Person } from '../lib/types'
+import { evaluate, isExpression } from '../lib/calc'
+import { setCalcTarget } from '../lib/calcTarget'
 
 export function Mascot({ size = 120, mood = 'happy', className = '' }: { size?: number; mood?: 'happy' | 'sleepy' | 'wow' | 'sad'; className?: string }) {
   // 반반이: a half-pink, half-mint rice ball friend.
@@ -121,32 +123,78 @@ export function EmojiPicker({ value, options, onChange }: { value: string; optio
   )
 }
 
-export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, className = '' }: { value: number; onChange: (n: number) => void; placeholder?: string; autoFocus?: boolean; className?: string }) {
+export function MoneyInput({
+  value,
+  onChange,
+  placeholder = '0',
+  autoFocus,
+  className = '',
+  label,
+}: {
+  value: number
+  onChange: (n: number) => void
+  placeholder?: string
+  autoFocus?: boolean
+  className?: string
+  /** Shown by the floating calculator's「填入」button. */
+  label?: string
+}) {
   const [text, setText] = useState(value ? String(value) : '')
   const last = useRef(value)
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
   useEffect(() => {
     if (value !== last.current) {
       last.current = value
       setText(value ? String(value) : '')
     }
   }, [value])
+  const commit = (t: string) => {
+    const n = t.trim() === '' ? 0 : evaluate(t)
+    if (n == null) return
+    last.current = n
+    onChangeRef.current(n)
+  }
+  const settle = () => {
+    // Replace a typed expression with its result once the user leaves the field.
+    if (isExpression(text)) {
+      const n = evaluate(text)
+      if (n != null) setText(String(n))
+    }
+  }
+  const expr = isExpression(text)
+  const preview = expr ? evaluate(text) : null
   return (
-    <input
-      className={`input input--money ${className}`}
-      inputMode="decimal"
-      placeholder={placeholder}
-      autoFocus={autoFocus}
-      value={text}
-      onChange={(e) => {
-        const t = e.target.value.replace(/[^\d.\-]/g, '')
-        setText(t)
-        const n = parseFloat(t)
-        const v = Number.isFinite(n) ? n : 0
-        last.current = v
-        onChange(v)
-      }}
-      onFocus={(e) => e.target.select()}
-    />
+    <span className={`money-wrap ${className}`}>
+      <input
+        className={`input input--money ${expr ? 'is-expr' : ''} ${expr && preview == null ? 'is-bad' : ''}`}
+        inputMode="decimal"
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        value={text}
+        onChange={(e) => {
+          const t = e.target.value.replace(/[^\d.,+\-*/()%×÷xX\s０-９＋－×÷（）．]/g, '')
+          setText(t)
+          commit(t)
+        }}
+        onFocus={(e) => {
+          e.target.select()
+          setCalcTarget({
+            label: label ?? '這個欄位',
+            apply: (n) => {
+              setText(String(n))
+              last.current = n
+              onChangeRef.current(n)
+            },
+          })
+        }}
+        onBlur={settle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        }}
+      />
+      {expr && preview != null && <span className="money-preview">= {preview}</span>}
+    </span>
   )
 }
 

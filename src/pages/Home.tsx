@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { navigate } from '../router'
 import { computeSplit, fmtMoney } from '../lib/split'
 import { Empty, Mascot } from '../components/ui'
 import type { Project } from '../lib/types'
+import Calculator from '../components/Calculator'
 
 const MODE_LABEL: Record<Project['mode'], string> = { equal: '均攤', items: '各點各的', mains: '主餐+共享' }
 
@@ -51,6 +52,7 @@ export default function Home() {
   const addProject = useStore((s) => s.addProject)
   const encrypted = useStore((s) => s.encrypted)
   const lock = useStore((s) => s.lock)
+  const [calcOpen, setCalcOpen] = useState(false)
 
   const totalOwed = useMemo(() => {
     let sum = 0
@@ -118,6 +120,10 @@ export default function Home() {
           ＋
         </button>
       )}
+      <button type="button" className="calc-fab calc-fab--left" onClick={() => setCalcOpen(true)} aria-label="小算盤">
+        🧮
+      </button>
+      <Calculator open={calcOpen} onClose={() => setCalcOpen(false)} ctx={{ currency: base, base, rate: null, chips: [] }} />
     </div>
   )
 }
