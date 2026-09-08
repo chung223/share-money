@@ -7,6 +7,7 @@ import type { Project } from '../lib/types'
 import type { Group } from '../lib/types'
 import { CATEGORIES, categoryOf, modeLabel, type Category } from '../lib/category'
 import BalancesSheet from '../components/BalancesSheet'
+import Calculator from '../components/Calculator'
 import QuickCreateSheet from '../components/QuickCreateSheet'
 import LineInboxSheet from '../components/LineInboxSheet'
 import { useAiAvailable } from '../components/useAiAvailable'
@@ -94,6 +95,7 @@ export default function Home() {
   const [quick, setQuick] = useState(false)
   const lineDrafts = useStore((s) => s.lineDrafts)
   const [inbox, setInbox] = useState(false)
+  const [calcOpen, setCalcOpen] = useState(false)
   // LINE bot 的按鈕會帶 #/inbox、#/balances 進來
   useEffect(() => {
     const h = location.hash
@@ -199,6 +201,10 @@ export default function Home() {
           ＋
         </button>
       )}
+      <button type="button" className="calc-fab calc-fab--left" onClick={() => setCalcOpen(true)} aria-label="小算盤">
+        🧮
+      </button>
+      <Calculator open={calcOpen} onClose={() => setCalcOpen(false)} ctx={{ currency: base, base, rate: null, chips: [] }} />
 
       <BalancesSheet open={balances} onClose={() => setBalances(false)} />
       <Sheet open={newTrip} onClose={() => setNewTrip(false)} title="🧳 開一趟旅程">

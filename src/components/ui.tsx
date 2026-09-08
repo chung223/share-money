@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { Person } from '../lib/types'
 import { evalMoney, looksLikeExpression } from '../lib/expr'
+import { setCalcTarget } from '../lib/calcTarget'
 
 export function Mascot({ size = 120, mood = 'happy', className = '' }: { size?: number; mood?: 'happy' | 'sleepy' | 'wow' | 'sad'; className?: string }) {
   // 반반이: a half-pink, half-mint rice ball friend.
@@ -123,9 +124,11 @@ export function EmojiPicker({ value, options, onChange }: { value: string; optio
 }
 
 /** 金額欄，順便是小算盤：打 120+80、300/2、(300+50)/2，離開欄位或按 Enter 就算好。 */
-export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, className = '' }: { value: number; onChange: (n: number) => void; placeholder?: string; autoFocus?: boolean; className?: string }) {
+export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, className = '', label }: { value: number; onChange: (n: number) => void; placeholder?: string; autoFocus?: boolean; className?: string; /** 浮動小算盤「填入」按鈕上顯示的欄位名 */ label?: string }) {
   const [text, setText] = useState(value ? String(value) : '')
   const last = useRef(value)
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
   useEffect(() => {
     if (value !== last.current) {
       last.current = value
@@ -151,7 +154,7 @@ export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, clas
         autoFocus={autoFocus}
         value={text}
         onChange={(e) => {
-          const t = e.target.value.replace(/[^\d.\-+*/()×÷xX,\s]/g, '')
+          const t = e.target.value.replace(/[^\d.\-+*/()%×÷xX,\s０-９＋－（）．％]/g, '')
           setText(t)
           if (looksLikeExpression(t)) return // wait for blur / Enter
           const n = parseFloat(t.replace(/,/g, ''))
@@ -166,7 +169,17 @@ export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, clas
             commit((e.target as HTMLInputElement).value)
           }
         }}
-        onFocus={(e) => e.target.select()}
+        onFocus={(e) => {
+          e.target.select()
+          setCalcTarget({
+            label: label ?? '這個欄位',
+            apply: (n) => {
+              last.current = n
+              setText(n ? String(n) : '')
+              onChangeRef.current(n)
+            },
+          })
+        }}
       />
       {isExpr && <span className="money-wrap__hint">{preview != null ? `= ${preview}` : '…'}</span>}
     </span>
