@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { evaluate } from '../lib/calc'
+import { evalMoney as evaluate } from '../lib/expr'
 import { getCalcTarget, subscribeCalcTarget } from '../lib/calcTarget'
 import { fmtMoney } from '../lib/split'
 import { Sheet } from './ui'

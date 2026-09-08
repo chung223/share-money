@@ -3,17 +3,30 @@ import { newItem, newPerson, uid, useStore } from '../store'
 import { navigate } from '../router'
 import { computeSplit, fmtMoney, itemTotal, resolveSharers, summaryText } from '../lib/split'
 import { fetchRate } from '../lib/rates'
-import { CURRENCIES, PROJECT_EMOJIS, currencyMeta, type Extra, type Item, type Person, type Project, type SplitMode } from '../lib/types'
+import { CURRENCIES, currencyMeta, type Extra, type Group, type Item, type Person, type Project, type SplitMode } from '../lib/types'
 import { Avatar, Confetti, EmojiPicker, Empty, MoneyInput, Segmented, Sheet } from '../components/ui'
+import ShareLinkSheet from '../components/ShareLinkSheet'
+import ReminderSheet from '../components/ReminderSheet'
+import PaymentsSheet from '../components/PaymentsSheet'
+import SettleSheet from '../components/SettleSheet'
+import { aiChat } from '../lib/ai'
+import { assignSystem, normaliseAssign } from '../lib/aiAssist'
+import { useAiAvailable } from '../components/useAiAvailable'
+import { isMobile, lineShareUrl } from '../lib/lineShare'
+import { shareUrl, defaultOgTitle } from '../lib/share'
+import { hasMultiPayer, transferKey, type PersonResult, type Transfer } from '../lib/split'
+import { CATEGORIES, categoryOf, emojiOptions, type CategoryMeta } from '../lib/category'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
 import Calculator from '../components/Calculator'
 import { PersonEditor } from './SettingsPage'
 
-const MODES: { value: SplitMode; label: string; emoji: string; desc: string }[] = [
-  { value: 'equal', label: '均攤', emoji: '🍕', desc: '總額除以人數，最無腦' },
-  { value: 'items', label: '各點各的', emoji: '🍱', desc: '每個品項點誰吃，多人就均分' },
-  { value: 'mains', label: '主餐+共享', emoji: '🍲', desc: '主餐各付各的，小菜大家分' },
-]
+function modesFor(cat: CategoryMeta): { value: SplitMode; label: string; emoji: string; desc: string }[] {
+  return [
+    { value: 'equal', label: '均攤', emoji: '➗', desc: '總額除以人數，最無腦' },
+    { value: 'items', label: '各點各的', emoji: '🧾', desc: cat.itemsDesc },
+    { value: 'mains', label: cat.mainsMode, emoji: '🧩', desc: cat.mainsDesc },
+  ]
+}
 
 export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'result' }) {
   const project = useStore((s) => s.data.projects.find((p) => p.id === id))
@@ -28,11 +41,16 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   const [peopleOpen, setPeopleOpen] = useState(false)
   const [editPerson, setEditPerson] = useState<Person | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  const [paymentsOpen, setPaymentsOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assignHint, setAssignHint] = useState('')
+  const [assignBusy, setAssignBusy] = useState(false)
+  const ai = useAiAvailable()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [calcOpen, setCalcOpen] = useState(false)
 
-  const result = useMemo(() => (project ? computeSplit(project) : null), [project])
+  const result = useMemo(() => (project ? computeSplit(project, data.baseCurrency) : null), [project, data.baseCurrency])
 
   if (!project || !result) {
     return (
@@ -49,11 +67,50 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   const set = (fn: (p: Project) => void) => updateProject(p.id, fn)
   const base = data.baseCurrency
   const foreign = p.currency !== base
+  const multi = hasMultiPayer(p)
+  const cat = categoryOf(p)
+  const MODES = modesFor(cat)
+  const isPayerOf = (id: string) => (multi ? (p.payments ?? []).some((x) => x.personId === id && x.amount > 0) : id === p.payerId)
+
+  const runAssign = async () => {
+    if (!project) return
+    setAssignBusy(true)
+    try {
+      const items = project.items.filter((it) => it.price !== 0)
+      const user = `品項：\n${items.map((it, i) => `${i}. ${it.name || '（未命名）'} ×${it.qty} ${it.price}`).join('\n')}${assignHint.trim() ? `\n補充說明：${assignHint.trim()}` : ''}`
+      const raw = await aiChat({ system: assignSystem(project.people.map((x) => x.name), project.mode === 'mains' ? 'mains' : 'items'), user, maxTokens: 3000 })
+      const patches = normaliseAssign(raw, items, project.people)
+      updateProject(project.id, (pp) => {
+        if (pp.mode === 'equal') pp.mode = 'items'
+        items.forEach((it, i) => {
+          const target = pp.items.find((x) => x.id === it.id)
+          const patch = patches[i]
+          if (!target || !patch.sharedBy) return
+          target.sharedBy = patch.sharedBy
+          target.kind = pp.mode === 'mains' ? patch.kind ?? 'shared' : target.kind
+        })
+      })
+      setAssignOpen(false)
+      showToast('分好了，看一下有沒有分錯', '✨')
+    } catch (e) {
+      showToast(e instanceof Error ? e.message.slice(0, 100) : 'AI 失敗', '😵')
+    } finally {
+      setAssignBusy(false)
+    }
+  }
 
   const onImport = (r: ImportResult) => {
     set((pp) => {
+      const fresh = !pp.items.some((it) => it.price > 0)
+      if (fresh && r.currency && r.currency !== pp.currency && CURRENCIES.some((c) => c.code === r.currency)) {
+        pp.currency = r.currency
+        pp.rate = r.currency === base ? null : pp.rate
+      }
       for (const row of r.rows) {
         pp.items.push(newItem({ name: row.name, qty: row.qty, price: row.price, sharedBy: 'all', kind: 'shared' }))
+      }
+      for (const e of r.extras ?? []) {
+        pp.extras.push({ id: uid(), name: e.name, emoji: e.amount < 0 ? '🏷️' : /外送|運費|delivery/i.test(e.name) ? '🛵' : '🧂', type: 'fixed', value: e.amount, split: 'proportional' })
       }
       if (r.date && !pp.items.length) pp.date = r.date
       if (r.total != null && r.total > 0) pp.receiptTotal = r.total
@@ -71,9 +128,10 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   return (
     <div className="page page--with-bar">
       <header className="topbar">
-        <button type="button" className="icon-btn" onClick={() => navigate('/')} aria-label="返回">
+        <button type="button" className="icon-btn" onClick={() => navigate(p.tripId && data.trips?.some((t) => t.id === p.tripId) ? `/t/${p.tripId}` : '/')} aria-label="返回">
           ←
         </button>
+        {p.tripId && data.trips?.some((t) => t.id === p.tripId) && <span className="muted small">🧳 {data.trips.find((t) => t.id === p.tripId)!.name}</span>}
         <div className="grow" />
         <button type="button" className="icon-btn" onClick={() => setMenuOpen(true)} aria-label="更多">
           ⋯
@@ -85,9 +143,27 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
           {p.emoji}
         </button>
         <div className="grow stack-xs">
-          <input className="input input--title" placeholder="這餐叫什麼？" value={p.name} onChange={(e) => set((pp) => (pp.name = e.target.value))} />
+          <input className="input input--title" placeholder={cat.namePlaceholder} value={p.name} onChange={(e) => set((pp) => (pp.name = e.target.value))} />
           <input className="input input--date" type="date" value={p.date} onChange={(e) => set((pp) => (pp.date = e.target.value))} />
         </div>
+      </div>
+      <div className="chip-row cat-row">
+        {CATEGORIES.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`chip chip--xs ${cat.id === c.id ? 'is-on' : ''}`}
+            onClick={() =>
+              set((pp) => {
+                const prev = categoryOf(pp)
+                pp.category = c.id
+                if (prev.emojis.includes(pp.emoji)) pp.emoji = c.emojis[0] // still on the old default set -> swap icon too
+              })
+            }
+          >
+            {c.emoji} {c.label}
+          </button>
+        ))}
       </div>
 
       <Segmented<'items' | 'result'>
@@ -105,14 +181,17 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
           <section className="card stack">
             <div className="row between center">
               <div className="section-title">👯 誰一起</div>
-              <span className="muted small">點頭像可以改；⭐ 是代墊的人</span>
+              <button type="button" className={`btn btn--sm ${multi ? 'btn--butter' : 'btn--ghost'}`} onClick={() => setPaymentsOpen(true)}>
+                💸 {multi ? `${(p.payments ?? []).filter((x) => x.amount > 0).length} 人先付` : '多人先付'}
+              </button>
             </div>
+            <span className="muted small">點頭像可以改；⭐ 是先付錢的人</span>
             <div className="people-row">
               {p.people.map((person) => (
-                <div key={person.id} className={`person-chip ${person.id === p.payerId ? 'is-payer' : ''}`}>
+                <div key={person.id} className={`person-chip ${isPayerOf(person.id) ? 'is-payer' : ''}`}>
                   <Avatar person={person} size={44} onClick={() => setEditPerson(person)} />
                   <span className="person-chip__name">{person.name}</span>
-                  {person.id === p.payerId && <span className="person-chip__star">⭐</span>}
+                  {isPayerOf(person.id) && <span className="person-chip__star">⭐</span>}
                 </div>
               ))}
               <button type="button" className="person-chip person-chip--add" onClick={() => setPeopleOpen(true)}>
@@ -142,6 +221,18 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
               </select>
             </div>
             {foreign && <RateRow p={p} base={base} set={set} />}
+            {!multi && (
+              <>
+                <div className="label">每人金額取整（總計不變，多收的會標出來）</div>
+                <div className="chip-row">
+                  {([0, 5, 10] as const).map((v) => (
+                    <button key={v} type="button" className={`chip ${(p.rounding ?? 0) === v ? 'is-on' : ''}`} onClick={() => set((pp) => (pp.rounding = v))}>
+                      {v === 0 ? '不取整' : `進位到 ${v}`}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </section>
 
           {/* Mode */}
@@ -162,13 +253,20 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
           <section className="card stack">
             <div className="row between center">
               <div className="section-title">🧾 明細</div>
-              <button type="button" className="btn btn--sm btn--mint" onClick={() => setImportOpen(true)}>
-                📷 掃描 / 匯入
-              </button>
+              <div className="row gap-s">
+                {ai && p.items.some((it) => it.price !== 0) && p.people.length > 1 && (
+                  <button type="button" className="btn btn--sm btn--butter" onClick={() => setAssignOpen(true)}>
+                    ✨ AI 幫我分
+                  </button>
+                )}
+                <button type="button" className="btn btn--sm btn--mint" onClick={() => setImportOpen(true)}>
+                  📷 掃描 / 匯入
+                </button>
+              </div>
             </div>
             {p.items.length === 0 && (
               <p className="muted small">
-                {p.mode === 'equal' ? '輸入這餐的總金額就好。' : '一項一項加，或用右上角掃發票。'}
+                {p.mode === 'equal' ? cat.equalHint : '一項一項加，或用右上角掃發票。'}
               </p>
             )}
             <div className="stack-s">
@@ -260,7 +358,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
       <Sheet open={emojiOpen} onClose={() => setEmojiOpen(false)} title="換個圖示">
         <EmojiPicker
           value={p.emoji}
-          options={PROJECT_EMOJIS}
+          options={emojiOptions(cat)}
           onChange={(e) => {
             set((pp) => (pp.emoji = e))
             setEmojiOpen(false)
@@ -268,23 +366,25 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
         />
       </Sheet>
 
-      <PeopleSheet open={peopleOpen} onClose={() => setPeopleOpen(false)} p={p} friends={data.friends} me={data.me} set={set} onSaveFriend={(f) => update((d) => d.friends.push(f))} />
+      <PeopleSheet open={peopleOpen} onClose={() => setPeopleOpen(false)} p={p} friends={data.friends} me={data.me} groups={data.groups ?? []} set={set} onSaveFriend={(f) => update((d) => d.friends.push(f))} />
 
       <Sheet open={!!editPerson} onClose={() => setEditPerson(null)} title="這位是…">
         {editPerson && (
           <div className="stack">
             <PersonEditor person={editPerson} title="TA" onChange={setEditPerson} />
             <div className="row gap wrap">
-              <button
-                type="button"
-                className={`btn ${p.payerId === editPerson.id ? 'btn--butter' : 'btn--ghost'} grow`}
-                onClick={() => {
-                  set((pp) => (pp.payerId = editPerson.id))
-                  showToast(`${editPerson.name} 是代墊的人`, '⭐')
-                }}
-              >
-                ⭐ {p.payerId === editPerson.id ? '就是 TA 代墊' : '設為代墊者'}
-              </button>
+              {!multi && (
+                <button
+                  type="button"
+                  className={`btn ${p.payerId === editPerson.id ? 'btn--butter' : 'btn--ghost'} grow`}
+                  onClick={() => {
+                    set((pp) => (pp.payerId = editPerson.id))
+                    showToast(`${editPerson.name} 是代墊的人`, '⭐')
+                  }}
+                >
+                  ⭐ {p.payerId === editPerson.id ? '就是 TA 代墊' : '設為代墊者'}
+                </button>
+              )}
               {p.people.length > 1 && (
                 <button
                   type="button"
@@ -293,13 +393,15 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
                     set((pp) => {
                       pp.people = pp.people.filter((x) => x.id !== editPerson.id)
                       if (pp.payerId === editPerson.id) pp.payerId = pp.people[0].id
+                      if (pp.payments) pp.payments = pp.payments.filter((x) => x.personId !== editPerson.id)
                       for (const it of pp.items) if (it.sharedBy !== 'all') it.sharedBy = it.sharedBy.filter((x) => x !== editPerson.id)
                       delete pp.settled[editPerson.id]
+                      for (const k of Object.keys(pp.settled)) if (k.split('_').includes(editPerson.id)) delete pp.settled[k]
                     })
                     setEditPerson(null)
                   }}
                 >
-                  移出這餐
+                  移出{cat.thisOne}
                 </button>
               )}
             </div>
@@ -324,8 +426,18 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
       </Sheet>
 
       <ImportSheet open={importOpen} onClose={() => setImportOpen(false)} onImport={onImport} />
+      <PaymentsSheet open={paymentsOpen} onClose={() => setPaymentsOpen(false)} p={p} result={result} set={set} />
+      <Sheet open={assignOpen} onClose={() => setAssignOpen(false)} title="✨ AI 幫我分">
+        <div className="stack">
+          <p className="muted small">AI 會看品名猜是誰的{p.mode === 'mains' ? '、哪些是主餐哪些共享' : ''}。可以補一句說明，例如「牛肉麵是小明的，飲料大家分」。{p.mode === 'equal' ? '目前是均攤，分完會切成「各點各的」。' : ''}</p>
+          <input className="input" placeholder="補充說明（選填）" value={assignHint} onChange={(e) => setAssignHint(e.target.value)} />
+          <button type="button" className="btn btn--primary btn--lg" disabled={assignBusy} onClick={runAssign}>
+            {assignBusy ? 'AI 分配中…' : '開始分'}
+          </button>
+        </div>
+      </Sheet>
 
-      <Sheet open={menuOpen} onClose={() => { setMenuOpen(false); setConfirmDelete(false) }} title={p.name || '未命名聚餐'}>
+      <Sheet open={menuOpen} onClose={() => { setMenuOpen(false); setConfirmDelete(false) }} title={p.name || cat.unnamed}>
         <div className="stack">
           <button
             type="button"
@@ -349,6 +461,21 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
           >
             ↩️ 重設收款狀態
           </button>
+          {(data.trips?.length ?? 0) > 0 && (
+            <>
+              <div className="label">🧳 屬於哪趟旅程</div>
+              <div className="chip-row">
+                <button type="button" className={`chip chip--xs ${!p.tripId ? 'is-on' : ''}`} onClick={() => set((pp) => delete pp.tripId)}>
+                  不屬於旅程
+                </button>
+                {data.trips!.map((t) => (
+                  <button key={t.id} type="button" className={`chip chip--xs ${p.tripId === t.id ? 'is-on' : ''}`} onClick={() => set((pp) => (pp.tripId = t.id))}>
+                    {t.emoji} {t.name}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           {!confirmDelete ? (
             <button type="button" className="btn btn--ghost btn--danger-text" onClick={() => setConfirmDelete(true)}>
               🗑 刪除這個帳本
@@ -505,7 +632,7 @@ function ItemRow({ item, p, set }: { item: Item; p: Project; set: (fn: (p: Proje
                 })
               }
             >
-              {item.kind === 'main' ? '🍛 主餐' : '🥗 共享'}
+              {item.kind === 'main' ? categoryOf(p).mainLabel : categoryOf(p).sharedLabel}
             </button>
           )}
           <div className="who-chips">
@@ -607,12 +734,20 @@ function ExtraRow({ extra, p, set }: { extra: Extra; p: Project; set: (fn: (p: P
 
 /* ---------------- People sheet ---------------- */
 
-function PeopleSheet({ open, onClose, p, friends, me, set, onSaveFriend }: { open: boolean; onClose: () => void; p: Project; friends: Person[]; me: Person; set: (fn: (p: Project) => void) => void; onSaveFriend: (f: Person) => void }) {
+function PeopleSheet({ open, onClose, p, friends, me, groups, set, onSaveFriend }: { open: boolean; onClose: () => void; p: Project; friends: Person[]; me: Person; groups: Group[]; set: (fn: (p: Project) => void) => void; onSaveFriend: (f: Person) => void }) {
   const [name, setName] = useState('')
   const [remember, setRemember] = useState(true)
   const inProject = new Set(p.people.map((x) => x.id))
   const candidates = [me, ...friends].filter((f) => !inProject.has(f.id))
   const add = (person: Person) => set((pp) => pp.people.push(person))
+  const addGroup = (g: Group) =>
+    set((pp) => {
+      const have = new Set(pp.people.map((x) => x.id))
+      for (const id of g.personIds) {
+        const f = [me, ...friends].find((x) => x.id === id)
+        if (f && !have.has(id)) pp.people.push(f)
+      }
+    })
   const addNew = () => {
     const n = name.trim()
     if (!n) return
@@ -624,6 +759,15 @@ function PeopleSheet({ open, onClose, p, friends, me, set, onSaveFriend }: { ope
   return (
     <Sheet open={open} onClose={onClose} title="加人">
       <div className="stack">
+        {groups.length > 0 && (
+          <div className="chip-row">
+            {groups.map((g) => (
+              <button key={g.id} type="button" className="chip" onClick={() => addGroup(g)}>
+                {g.emoji} {g.name}
+              </button>
+            ))}
+          </div>
+        )}
         {candidates.length > 0 && (
           <>
             <div className="label">點一下加入</div>
@@ -658,22 +802,57 @@ function PeopleSheet({ open, onClose, p, friends, me, set, onSaveFriend }: { ope
 /* ---------------- Result ---------------- */
 
 function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: Project) => void) => void }) {
-  const result = useMemo(() => computeSplit(p), [p])
+  const result = useMemo(() => computeSplit(p, base), [p, base])
   const showToast = useStore((s) => s.showToast)
+  const meId = useStore((s) => s.data.me.id)
   const [open, setOpen] = useState<string | null>(null)
   const [confetti, setConfetti] = useState(false)
+  const [linkOpen, setLinkOpen] = useState(false)
+  const createShare = useStore((s) => s.createShare)
+  const [linkBusy, setLinkBusy] = useState(false)
+  const liveShare = p.share && p.share.expiresAt > Date.now() ? p.share : null
+  const lineText = liveShare ? `${liveShare.ogTitle ?? defaultOgTitle(p, categoryOf(p).unnamed)}\n看你的份、轉完按「我轉了」👉 ${shareUrl(liveShare.id, liveShare.key)}` : ''
+  const [remind, setRemind] = useState<{ person: PersonResult; amount?: number; baseAmount?: number | null; amountText?: string } | null>(null)
+  const [settle, setSettle] = useState<Transfer | null>(null)
   const foreign = p.currency !== base
-  const others = result.people.filter((r) => !r.isPayer)
-  const allSettled = others.length > 0 && others.every((r) => r.settled)
+  const transfers = result.transfers
+  const allSettled = transfers.length > 0 && transfers.every((t) => t.settled)
   const payer = p.people.find((x) => x.id === p.payerId)
+  const nameOf = (id: string) => p.people.find((x) => x.id === id)
+  const multi = result.multiPayer
 
-  const toggleSettled = (id: string) => {
-    const willBeAll = others.every((r) => (r.person.id === id ? !r.settled : r.settled))
-    set((pp) => (pp.settled[id] = !pp.settled[id]))
-    if (willBeAll) {
+  const prevSettled = useRef(transfers.filter((t) => t.settled).length)
+  useEffect(() => {
+    const n = transfers.filter((t) => t.settled).length
+    if (transfers.length > 0 && n === transfers.length && prevSettled.current < n) {
       setConfetti(true)
-      setTimeout(() => setConfetti(false), 2600)
+      const id = setTimeout(() => setConfetti(false), 2600)
+      prevSettled.current = n
+      return () => clearTimeout(id)
     }
+    prevSettled.current = n
+  }, [transfers])
+  const toggleSettled = (personId: string) => {
+    const t = transfers.find((x) => x.from === personId && x.to === p.payerId)
+    if (t) setSettle(t)
+  }
+  const remindPerson = (r: PersonResult) => {
+    const toMe = transfers.filter((t) => t.from === r.person.id && !t.settled && t.to === meId)
+    const list = toMe.length ? toMe : transfers.filter((t) => t.from === r.person.id && !t.settled)
+    if (!multi) {
+      const t = list[0]
+      // partial repayment: remind for what is left
+      if (t && t.paid > 0) return setRemind({ person: r, amountText: `${fmtMoney(t.remaining, t.dueCurrency)}（已還 ${fmtMoney(t.paid, t.dueCurrency)}）` })
+      return setRemind({ person: r })
+    }
+    const partial = list.some((t) => t.paid > 0)
+    if (partial || list.every((t) => t.dueCurrency === list[0]?.dueCurrency)) {
+      const remaining = list.reduce((a, t) => a + t.remaining, 0)
+      return setRemind({ person: r, amountText: fmtMoney(remaining, list[0].dueCurrency) })
+    }
+    const amount = list.reduce((a, t) => a + t.amount, 0)
+    const baseAmount = list.every((t) => t.baseAmount != null) ? list.reduce((a, t) => a + (t.baseAmount ?? 0), 0) : null
+    setRemind({ person: r, amount, baseAmount })
   }
 
   const share = async () => {
@@ -706,14 +885,24 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
       <Confetti on={confetti} />
       <div className={`card card--${allSettled ? 'mint' : 'pink'} total-card`}>
         <div>
-          <div className="total-card__label">{allSettled ? '全部收齊了！' : '這餐總共'}</div>
+          <div className="total-card__label">{allSettled ? '全部收齊了！' : `${categoryOf(p).thisOne}總共`}</div>
           <div className="total-card__value">{fmtMoney(result.grandTotalRounded, p.currency)}</div>
           {foreign && result.baseGrandTotal != null && <div className="total-card__base">≈ {fmtMoney(result.baseGrandTotal, base)}</div>}
           {foreign && result.baseGrandTotal == null && <div className="total-card__base">還沒有匯率，回明細設定一下</div>}
-          {payer && (
+          {multi ? (
             <div className="total-card__payer">
-              {payer.emoji} {payer.name} 代墊 · {others.filter((r) => r.settled).length}/{others.length} 人已還
+              先付：{result.people.filter((r) => r.paid > 0).map((r) => `${r.person.emoji}${r.person.name} ${fmtMoney(r.paid, p.currency)}`).join('、')} · {transfers.filter((t) => t.settled).length}/{transfers.length} 筆轉帳完成
             </div>
+          ) : (
+            payer && (
+              <div className="total-card__payer">
+                {payer.emoji} {payer.name} 代墊 · {transfers.filter((t) => t.settled).length}/{transfers.length} 人已還
+              </div>
+            )
+          )}
+          {result.overcharge > 0 && <div className="total-card__base">每人進位到 {p.rounding}，多收 {fmtMoney(result.overcharge, result.overchargeCurrency)}</div>}
+          {multi && result.paymentsDiff !== 0 && (
+            <div className="total-card__base">⚠️ 先付金額{result.paymentsDiff > 0 ? '多' : '少'}了 {fmtMoney(Math.abs(result.paymentsDiff), p.currency)}，回明細「誰付了錢」改一下</div>
           )}
         </div>
         <div className="total-card__emoji">{allSettled ? '🎉' : '🧾'}</div>
@@ -728,15 +917,23 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
                 <Avatar person={r.person} size={44} />
                 <div className="grow left">
                   <div className="strong">
-                    {r.person.name} {r.isPayer && <span className="pill pill--butter">⭐ 代墊</span>}
+                    {r.person.name} {(multi ? r.paid > 0 : r.isPayer) && <span className="pill pill--butter">⭐ {multi ? `先付 ${fmtMoney(r.paid, p.currency)}` : '代墊'}</span>}
                   </div>
-                  <div className="muted small">{r.lines.length} 項{r.extras.length ? ` + ${r.extras.length} 筆額外` : ''}</div>
+                  <div className="muted small">
+                    {r.lines.length} 項{r.extras.length ? ` + ${r.extras.length} 筆額外` : ''}
+                    {multi && r.net !== 0 && ` · ${r.net > 0 ? '該收回' : '該付'} ${fmtMoney(Math.abs(r.net), p.currency)}`}
+                  </div>
                 </div>
                 <div className="right">
                   <div className="person-result__amt">{fmtMoney(r.totalRounded, p.currency)}</div>
                   {foreign && r.baseTotal != null && <div className="muted small">≈ {fmtMoney(r.baseTotal, base)}</div>}
+                  {(() => {
+                    const t = !multi ? transfers.find((x) => x.from === r.person.id) : null
+                    return t && !t.settled && t.paid > 0 ? <div className="small c-text-pink">已還 {fmtMoney(t.paid, t.dueCurrency)} · 差 {fmtMoney(t.remaining, t.dueCurrency)}</div> : null
+                  })()}
                 </div>
               </button>
+              {!multi && p.paidNotes?.[transferKey(r.person.id, p.payerId)] && <div className="note-line">💬 {p.paidNotes[transferKey(r.person.id, p.payerId)]}</div>}
               {expanded && (
                 <div className="person-result__lines">
                   {r.lines.map((l, i) => (
@@ -758,20 +955,93 @@ function ResultView({ p, base, set }: { p: Project; base: string; set: (fn: (p: 
                   ))}
                 </div>
               )}
-              {!r.isPayer && (
-                <button type="button" className={`btn btn--sm ${r.settled ? 'btn--mint' : 'btn--ghost'} person-result__settle`} onClick={() => toggleSettled(r.person.id)}>
-                  {r.settled ? '✓ 已還我' : '還沒還'}
-                </button>
+              {(multi ? transfers.some((t) => t.from === r.person.id) : !r.isPayer) && (
+                <div className="person-result__actions">
+                  {!r.settled && (
+                    <button type="button" className="btn btn--sm btn--butter" onClick={() => remindPerson(r)}>
+                      📣 催款
+                    </button>
+                  )}
+                  {!multi && (
+                    <button type="button" className={`btn btn--sm ${r.settled ? 'btn--mint' : 'btn--ghost'}`} onClick={() => toggleSettled(r.person.id)}>
+                      {r.settled ? '✓ 已還我' : '還沒還'}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )
         })}
       </div>
 
+      {multi && (
+        <section className="card stack">
+          <div className="section-title">💸 誰轉給誰</div>
+          {transfers.length === 0 ? (
+            <p className="muted small">{result.paymentsDiff === 0 ? '剛好互相抵銷，不用轉帳 🎉' : '先把先付金額填對，才算得出來。'}</p>
+          ) : (
+            <div className="stack-xs">
+              {transfers.map((t) => {
+                const a = nameOf(t.from)
+                const b = nameOf(t.to)
+                return (
+                  <div key={t.key} className={`line line--person ${t.settled ? 'muted' : ''}`}>
+                    <span className="row gap-s center">
+                      <span className={`mini-avatar c-${a?.color}`}>{a?.emoji}</span>
+                      {a?.name} → <span className={`mini-avatar c-${b?.color}`}>{b?.emoji}</span>
+                      {b?.name}
+                    </span>
+                    <span className="row gap-s center">
+                      <span className="strong">{fmtMoney(t.amount, p.currency)}</span>
+                      {foreign && t.baseAmount != null && <span className="muted small">≈ {fmtMoney(t.baseAmount, base)}</span>}
+                      <button type="button" className={`btn btn--sm ${t.settled ? 'btn--mint' : 'btn--ghost'}`} onClick={() => setSettle(t)}>
+                        {t.settled ? '✓ 已轉' : t.paid > 0 ? `差 ${fmtMoney(t.remaining, t.dueCurrency)}` : '還沒'}
+                      </button>
+                    </span>
+                    {p.paidNotes?.[t.key] && <div className="note-line">💬 {p.paidNotes[t.key]}</div>}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {isMobile() &&
+        (liveShare ? (
+          <a className="btn btn--mint btn--lg" href={lineShareUrl(lineText)} target="_blank" rel="noreferrer">
+            💚 傳到 LINE 給大家（連結）
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="btn btn--mint btn--lg"
+            disabled={linkBusy}
+            onClick={async () => {
+              setLinkBusy(true)
+              try {
+                await createShare(p.id, 30, defaultOgTitle(p, categoryOf(p).unnamed))
+                showToast('連結好了，再按一次就會開 LINE', '💚')
+              } catch (e) {
+                showToast(e instanceof Error ? e.message : '失敗', '😵')
+              } finally {
+                setLinkBusy(false)
+              }
+            }}
+          >
+            {linkBusy ? '產生連結中…' : '💚 傳到 LINE 給大家'}
+          </button>
+        ))}
       <button type="button" className="btn btn--primary btn--lg" onClick={share}>
-        📤 分享結果
+        📤 分享結果（純文字）
       </button>
-      <p className="muted small center-text">會產生一段文字，直接貼到群組就好。</p>
+      <button type="button" className={`btn btn--lg ${p.share && p.share.expiresAt > Date.now() ? 'btn--mint' : 'btn--ghost'}`} onClick={() => setLinkOpen(true)}>
+        🔗 {p.share && p.share.expiresAt > Date.now() ? '連結已開，朋友可以按「我轉了」' : '給朋友的連結'}
+      </button>
+      <p className="muted small center-text">上面是純文字；下面的連結讓朋友看自己的份、按一下回報轉帳。</p>
+      <ShareLinkSheet p={p} open={linkOpen} onClose={() => setLinkOpen(false)} />
+      <ReminderSheet p={p} person={remind?.person ?? null} amount={remind?.amount} baseAmount={remind?.baseAmount} amountText={remind?.amountText} onClose={() => setRemind(null)} />
+      <SettleSheet p={p} t={settle} onClose={() => setSettle(null)} set={set} />
     </main>
   )
 }

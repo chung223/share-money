@@ -17,17 +17,19 @@ export interface LocalPrefs {
   theme: 'light' | 'dark' | 'system'
   hasPin: boolean
   lockDelay: LockDelay
+  /** First-run tutorial completed on this device. */
+  onboarded: boolean
 }
 
 const PREFS_KEY = 'banban:prefs'
 export function loadPrefs(): LocalPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY)
-    if (raw) return { theme: 'system', hasPin: false, lockDelay: 0, ...JSON.parse(raw) }
+    if (raw) return { theme: 'system', hasPin: false, lockDelay: 0, onboarded: false, ...JSON.parse(raw) }
   } catch {
     /* ignore */
   }
-  return { theme: 'system', hasPin: false, lockDelay: 0 }
+  return { theme: 'system', hasPin: false, lockDelay: 0, onboarded: false }
 }
 export function savePrefs(p: LocalPrefs) {
   localStorage.setItem(PREFS_KEY, JSON.stringify(p))

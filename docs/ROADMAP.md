@@ -1,7 +1,8 @@
 # 반반 BanBan 開發路線圖
 
-> 目前版本：純前端 PWA，部署在 GitHub Pages（`https://chung223.github.io/share-money/`）。
-> 下一步：搬到自己的 VPS，加上 Node 後端，解鎖同步、分享連結、通知、bot 等功能。
+> 目前版本：部署在 VPS `https://spilt.chung.men`（是 spilt 不是 split，將錯就錯）。
+> 第一階段（`server/` 後端、端對端加密同步、分享連結與「我轉了」）已於 2026-09-03 完成上線。
+> 下一步：第二階段通知與排程。
 
 ## 程式碼地圖（現況）
 
@@ -25,9 +26,18 @@
 - Node 20（可跑；日後升 22/24 LTS 只要在面板切版本）。
 - 後端語言選 **Node**：與前端共用 TypeScript 與拆帳邏輯，單一 repo、單一部署流程。
 
-## 第一階段：`server/` 基礎後端
+## 第一階段：`server/` 基礎後端 ✅（2026-09-03 完成）
 
 目標：多裝置同步 + 朋友的分享連結，資料維持端對端加密。
+
+### 實作結果（與原計畫的差異）
+
+- 後端：Hono + `@hono/node-server`，資料庫用 **Node 24 內建 `node:sqlite`**（不是 better-sqlite3，省掉 ARM 原生模組編譯與 Node 版本綁定）。TypeScript 直接由 Node 執行（type stripping），沒有 build 步驟。程式在 `server/src/{app,db,index}.ts`，測試 `server/src/app.test.ts`。
+- 身分與金鑰：一把 32 bytes 隨機 secret（顯示為 `bb1.<base64url>`），HKDF 派生出 **auth token**（伺服器只存 SHA-256）與 **AES-GCM 金鑰**（永不離開裝置）。有沒有設 PIN 都能同步；PIN 仍只管裝置上的加密。secret 存在 AppData 裡（設 PIN 就跟著加密）。
+- 合併：`mergeData()` 無需 base 的三方合併：帳本以 `updatedAt` 後者為準、刪除用墓碑（`deleted`）、朋友取聯集、純量欄位跟較新的那份。衝突（409）自動重拉重合併再推，最多 4 次。以 `canon()` 比對內容避免兩台裝置互推版本號。
+- 分享：`/s/<id>#<key>` 靜態頁（`s/index.html` → `src/share/`），key 只在 fragment。快照在同步時若過期於帳本 `updatedAt` 會自動重傳；「我轉了」事件由 `GET /api/sync` 帶回、套用後 `POST /api/share/ack`。
+- API 與原表相同，另加 `DELETE /api/sync`（停用並刪雲端）、`DELETE /api/share/:id`、`POST /api/share/ack`、`POST /api/share/:id/paid` 支援 `kind: 'unpaid'` 取消。
+- 部署：PM2 `banban`（`deploy/ecosystem.config.cjs`），`DATA_DIR=/www/banban-data`，nginx `/api/` 由寶塔反代、`/s/` try_files 到 `dist/s/index.html`。每日 `deploy/backup-db.sh` VACUUM INTO 備份到 `/www/my_www_backup/banban/` 保留 30 天。更新用 `deploy/update.sh`。
 
 ### 技術
 
@@ -78,11 +88,45 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 
 ## 第二階段：通知與排程
 
+- ✅ 2026-09-03 Web Push（VAPID，`push_subs` 表，`/api/push/*`，自訂 SW `src/sw.ts` injectManifest）：「我轉了」即時推播。朋友備註以分享金鑰加密存在 `share_events.note`。
+- ⏳ 每週一催款摘要推播（可直接用同一套 push，資料是密文所以要由前端在同步時產生摘要）。
+
 - Telegram bot（最簡單）或 LINE Messaging API（LINE Notify 已於 2025 停止服務）。
 - crontab 每週一早上：列出還沒還的人與金額，推播給自己；可選一鍵轉發給對方。
 - 有人按「我轉了」立即推播。
 
+## AI 小幫手（2026-09-04 ✅）
+
+- 一句話開帳本（含語音）、AI 寫催款訊息、AI 幫我分品項。提示詞與正規化在 `src/lib/aiAssist.ts`，呼叫走 `aiChat`（自己的金鑰優先，否則站方 `/api/ai/chat`）。
+- 使用者可自帶 OpenAI 相容／Anthropic 金鑰（`AppData.aiProvider`），站方 AI 需邀請碼與每日額度。
+
+## 旅程與共編（2026-09-04 ✅）
+
+- `Trip` 容器：一趟旅程裝多本各自分類的帳（`Project.tripId`）；旅程頁跨本抵銷結算（`tripSettlement`）、AI 總結；墓碑 `trip:<id>`。
+- 共編：`src/lib/tripSync.ts`，一趟一把 `bt1.` 金鑰（連結 `#/join/<id>/<secret>`），HKDF 派生 token（伺服器 `trips` 表只存 hash、密文、版本）。成員以 `share.myPersonId` 對應旅程內的人。推：改動 2.5 秒後；拉：開旅程頁、回前景、帳號同步後。衝突用 `mergeBundle`（沿用 mergeData）。內容與伺服器相同就不推（`bundleHash`）。
+
+## LINE 機器人（2026-09-04 ✅ 程式完成，待填 token）
+
+- Reply 型（免費）：加好友說明、連結碼綁帳號、一句話／收據照片 → 收件匣草稿 → App 一鍵建帳本。Push 型（吃額度、可關）：「我轉了」通知。
+- 設定：LINE Developers 建 Messaging API channel → `.env` 填 `LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN` → pm2 restart → console 設 Webhook URL 並 Verify。
+- 好友名單 API（followers/ids、群組成員）需認證帳號，一般帳號 403；名單只能從互動事件累積。
+
+## LINE 互動與生圖（2026-09-04 ✅）
+
+- Rich Menu（收件匣／誰欠我／開 App／說明）、收據 Flex 卡片、Quick Reply、postback 略過。
+- 群組模式：@bot 或「반반」開頭的句子進發言者的收件匣；互動過的成員記在 `line_group_members`。
+- 選擇性「誰欠我」明文摘要同步 + 週一 09:00 提醒（Push）。
+- MiniMax image-01 催款梗圖（催款視窗「生一張催款梗圖」），sharp 疊名字／金額／一句話。
+
+## LINE 等級 2（2026-09-04 ✅）
+
+- 帳本鏡像（opt-in 明文）：bot 回「最近帳本」carousel、帳本結算卡、某人欠款卡（催款文字／他還了）、旅程最少轉帳卡。
+- 指令佇列：「小明還了」「小明還了 200」「拉麵聚 加小華」「刪除 拉麵聚」（確認）→ App 同步時執行；可「取消」。
+- 小工具：「900 除 3」、「日圓 2400」。
+
 ## 第三階段：智慧匯入
+
+- ✅ 2026-09-03 伺服器端 AI 收據辨識 `POST /api/parse`（`server/src/ai.ts`，MiniMax OpenAI 相容 API：文字 M2.5、圖片 M3；每帳號每日 `AI_DAILY_QUOTA` 次）。前端圖片／PDF／貼上文字都可切 AI；`src/lib/pdf.ts` 用 pdfjs 抽文字層或轉圖。
 
 - LINE bot 收到收據照片 → 伺服器呼叫視覺模型解析品項 → 建立帳本 → 回傳連結。
 - 伺服器端收據辨識取代 Tesseract（準確度大幅提升，還能判斷主餐 / 共享）。
@@ -91,12 +135,12 @@ CREATE TABLE share_events (id INTEGER PRIMARY KEY, share_id TEXT, person_id TEXT
 
 ## 功能待辦（依優先順序）
 
-1. 催款訊息產生器：個人化文字 + 轉帳資訊（銀行代碼帳號 / LINE Pay）。
-2. 多人代墊 + 最少轉帳次數的債務簡化。
-3. 部分還款（記錄已還金額而非只有是 / 否）。
-4. 台幣結果取整到 5 或 10 元。
-5. 常用組合範本（固定群組一鍵帶入）。
-6. 分類與月報表（可愛圖表）。
+1. ~~催款訊息產生器：個人化文字 + 轉帳資訊（銀行代碼帳號 / LINE Pay）。~~ ✅ 2026-09-03
+2. ~~多人代墊 + 最少轉帳次數的債務簡化。~~ ✅ 2026-09-03（`payments[]`、`simplifyDebts`、settled 改以轉帳 key）
+3. ~~部分還款（記錄已還金額而非只有是 / 否）。~~ ✅ 2026-09-03（`partial`）
+4. ~~台幣結果取整到 5 或 10 元。~~ ✅ 2026-09-03（`rounding`，外幣帳本取整台幣金額）
+5. ~~常用組合範本（固定群組一鍵帶入）。~~ ✅ 2026-09-03（`groups`）
+6. 分類與月報表（可愛圖表）。— 分類 ✅ 2026-09-03（`Project.category`，六類，文案／圖示／分法名稱跟著分類，首頁可篩選）；月報表 ⏳
 7. 收據照片附加（注意加密後的儲存空間）。
 8. CSV / Excel 匯出、Splitwise 匯入。
 9. 旅遊模式：多帳本合併結算。

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { Person } from '../lib/types'
-import { evaluate, isExpression } from '../lib/calc'
+import { evalMoney, looksLikeExpression } from '../lib/expr'
 import { setCalcTarget } from '../lib/calcTarget'
 
 export function Mascot({ size = 120, mood = 'happy', className = '' }: { size?: number; mood?: 'happy' | 'sleepy' | 'wow' | 'sad'; className?: string }) {
@@ -123,22 +123,8 @@ export function EmojiPicker({ value, options, onChange }: { value: string; optio
   )
 }
 
-export function MoneyInput({
-  value,
-  onChange,
-  placeholder = '0',
-  autoFocus,
-  className = '',
-  label,
-}: {
-  value: number
-  onChange: (n: number) => void
-  placeholder?: string
-  autoFocus?: boolean
-  className?: string
-  /** Shown by the floating calculator's「填入」button. */
-  label?: string
-}) {
+/** 金額欄，順便是小算盤：打 120+80、300/2、(300+50)/2，離開欄位或按 Enter 就算好。 */
+export function MoneyInput({ value, onChange, placeholder = '0', autoFocus, className = '', label }: { value: number; onChange: (n: number) => void; placeholder?: string; autoFocus?: boolean; className?: string; /** 浮動小算盤「填入」按鈕上顯示的欄位名 */ label?: string }) {
   const [text, setText] = useState(value ? String(value) : '')
   const last = useRef(value)
   const onChangeRef = useRef(onChange)
@@ -150,50 +136,52 @@ export function MoneyInput({
     }
   }, [value])
   const commit = (t: string) => {
-    const n = t.trim() === '' ? 0 : evaluate(t)
-    if (n == null) return
-    last.current = n
-    onChangeRef.current(n)
+    if (!looksLikeExpression(t)) return
+    const v = evalMoney(t)
+    if (v == null) return
+    last.current = v
+    setText(v ? String(v) : '')
+    onChange(v)
   }
-  const settle = () => {
-    // Replace a typed expression with its result once the user leaves the field.
-    if (isExpression(text)) {
-      const n = evaluate(text)
-      if (n != null) setText(String(n))
-    }
-  }
-  const expr = isExpression(text)
-  const preview = expr ? evaluate(text) : null
+  const isExpr = looksLikeExpression(text)
+  const preview = isExpr ? evalMoney(text) : null
   return (
-    <span className={`money-wrap ${className}`}>
+    <span className={`money-wrap ${/\bgrow\b/.test(className) ? 'grow' : ''} ${/\binput--qty\b/.test(className) ? 'money-wrap--wide' : ''}`}>
       <input
-        className={`input input--money ${expr ? 'is-expr' : ''} ${expr && preview == null ? 'is-bad' : ''}`}
+        className={`input input--money ${className.replace(/\b(grow|input--qty)\b/g, '')} ${isExpr ? 'input--expr' : ''}`}
         inputMode="decimal"
         placeholder={placeholder}
         autoFocus={autoFocus}
         value={text}
         onChange={(e) => {
-          const t = e.target.value.replace(/[^\d.,+\-*/()%×÷xX\s０-９＋－×÷（）．]/g, '')
+          const t = e.target.value.replace(/[^\d.\-+*/()%×÷xX,\s０-９＋－（）．％]/g, '')
           setText(t)
-          commit(t)
+          if (looksLikeExpression(t)) return // wait for blur / Enter
+          const n = parseFloat(t.replace(/,/g, ''))
+          const v = Number.isFinite(n) ? n : 0
+          last.current = v
+          onChange(v)
+        }}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === '=') {
+            e.preventDefault()
+            commit((e.target as HTMLInputElement).value)
+          }
         }}
         onFocus={(e) => {
           e.target.select()
           setCalcTarget({
             label: label ?? '這個欄位',
             apply: (n) => {
-              setText(String(n))
               last.current = n
+              setText(n ? String(n) : '')
               onChangeRef.current(n)
             },
           })
         }}
-        onBlur={settle}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-        }}
       />
-      {expr && preview != null && <span className="money-preview">= {preview}</span>}
+      {isExpr && <span className="money-wrap__hint">{preview != null ? `= ${preview}` : '…'}</span>}
     </span>
   )
 }

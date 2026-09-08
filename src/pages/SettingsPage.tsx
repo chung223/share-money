@@ -5,6 +5,13 @@ import { CURRENCIES, PALETTE, PERSON_EMOJIS, type Person } from '../lib/types'
 import { Avatar, EmojiPicker, Sheet } from '../components/ui'
 import PinPad from '../components/PinPad'
 import type { LockDelay } from '../lib/storage'
+import SyncSection from '../components/SyncSection'
+import PayInfoSection from '../components/PayInfoSection'
+import GroupsSection from '../components/GroupsSection'
+import UpdateSection from '../components/UpdateSection'
+import PushSection from '../components/PushSection'
+import AiSection from '../components/AiSection'
+import LineSection from '../components/LineSection'
 
 export function PersonEditor({ person, onChange, onDelete, title }: { person: Person; onChange: (p: Person) => void; onDelete?: () => void; title: string }) {
   return (
@@ -41,6 +48,7 @@ export default function SettingsPage() {
   const importData = useStore((s) => s.importData)
   const wipe = useStore((s) => s.wipe)
   const showToast = useStore((s) => s.showToast)
+  const setTutorialOpen = useStore((s) => s.setTutorialOpen)
 
   const [pinStep, setPinStep] = useState<null | 'new' | 'confirm'>(null)
   const [pinFirst, setPinFirst] = useState('')
@@ -147,6 +155,12 @@ export default function SettingsPage() {
           )}
         </section>
 
+        <SyncSection />
+        <PushSection />
+        <AiSection />
+        <LineSection />
+        <PayInfoSection />
+
         <section className="card stack">
           <div className="section-title">🎨 外觀</div>
           <div className="chip-row">
@@ -195,6 +209,8 @@ export default function SettingsPage() {
           </div>
         </section>
 
+        <GroupsSection />
+
         <section className="card stack">
           <div className="section-title">📦 備份與還原</div>
           <p className="muted small">匯出成 JSON 檔存好，換手機時再匯入。備份檔是明文的，請自己保管。</p>
@@ -208,6 +224,8 @@ export default function SettingsPage() {
             <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => onImportFile(e.target.files?.[0])} />
           </div>
         </section>
+
+        <UpdateSection />
 
         <section className="card stack">
           <div className="section-title">🧹 清除</div>
@@ -239,7 +257,12 @@ export default function SettingsPage() {
         </section>
 
         <p className="muted small center-text">
-          반반 BanBan · 所有資料只存在你的裝置 · <a href="https://github.com/chung223/share-money" target="_blank" rel="noreferrer">GitHub</a>
+          <button type="button" className="link" onClick={() => setTutorialOpen(true)}>
+            📖 重看新手教學
+          </button>
+        </p>
+        <p className="muted small center-text">
+          반반 BanBan · 資料存在你的裝置，同步時先加密 · <a href="https://github.com/chung223/share-money" target="_blank" rel="noreferrer">GitHub</a>
         </p>
       </main>
 
