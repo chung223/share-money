@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export type Route = { name: 'home' } | { name: 'project'; id: string; tab?: 'items' | 'result' } | { name: 'settings' } | { name: 'trip'; id: string } | { name: 'join'; id: string; key: string } | { name: 'friends' }
+export type Route = { name: 'home' } | { name: 'project'; id: string; tab?: 'items' | 'result' } | { name: 'settings' } | { name: 'trip'; id: string } | { name: 'join'; id: string; key: string } | { name: 'friends' } | { name: 'stats' }
 
 function parse(hash: string): Route {
   const h = hash.replace(/^#/, '')
@@ -8,6 +8,7 @@ function parse(hash: string): Route {
   if (m) return { name: 'project', id: m[1], tab: (m[2] as 'items' | 'result') ?? 'items' }
   if (h.startsWith('/settings')) return { name: 'settings' }
   if (h.startsWith('/friends')) return { name: 'friends' }
+  if (h.startsWith('/stats')) return { name: 'stats' }
   const j = /^\/join\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)/.exec(h)
   if (j) return { name: 'join', id: j[1], key: j[2] }
   const t = /^\/t\/([^/]+)/.exec(h)

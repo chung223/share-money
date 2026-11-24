@@ -131,6 +131,9 @@ export default function Home() {
               🔒
             </button>
           )}
+          <button type="button" className="icon-btn" title="統計" onClick={() => navigate('/stats')}>
+            📊
+          </button>
           <button type="button" className="icon-btn" title="朋友" onClick={() => navigate('/friends')}>
             👥
           </button>

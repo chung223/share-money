@@ -40,6 +40,11 @@ export function categoryOf(p: Pick<Project, 'category' | 'emoji'>): CategoryMeta
   return byId.get(id) ?? CATEGORIES[0]
 }
 
+/** 統計用：明確分類 > 依 emoji 猜 > 猜不到算「其他」（跟 categoryOf 不同：那個猜不到是吃飯）。 */
+export function guessCategory(p: Pick<Project, 'category' | 'emoji'>): Category {
+  return p.category && byId.has(p.category) ? p.category : (byEmoji.get(p.emoji) ?? 'other')
+}
+
 export function modeLabel(mode: SplitMode, cat: CategoryMeta) {
   return mode === 'equal' ? '均攤' : mode === 'items' ? '各點各的' : cat.mainsMode
 }
