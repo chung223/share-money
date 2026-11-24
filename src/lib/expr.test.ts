@@ -21,10 +21,19 @@ describe('evalMoney', () => {
     expect(evalMoney('1/0')).toBeNull()
     expect(evalMoney('')).toBeNull()
   })
+  it('accepts full-width input and postfix percent', () => {
+    expect(evalMoney('１２０＋３０')).toBe(150)
+    expect(evalMoney('1,280 × 2')).toBe(2560)
+    expect(evalMoney('1000*10%')).toBe(100)
+    expect(evalMoney('1000+1000*10%')).toBe(1100)
+    expect(evalMoney('120*2+30')).toBe(270)
+  })
   it('detects expressions', () => {
     expect(looksLikeExpression('120+80')).toBe(true)
     expect(looksLikeExpression('120')).toBe(false)
     expect(looksLikeExpression('-120')).toBe(false)
+    expect(looksLikeExpression('1,280')).toBe(false)
+    expect(looksLikeExpression('1000*10%')).toBe(true)
   })
 })
 

@@ -101,6 +101,8 @@ export interface Project {
   /** Round each person's amount up to a multiple of 5 / 10 (single-payer only). 0/undefined = off. */
   rounding?: 0 | 5 | 10
   note?: string
+  /** 收據上印的總計，用來核對輸入是否漏了品項或折扣（掃 QR / OCR 會自動帶入）。 */
+  receiptTotal?: number
   /** Friend-facing share link (see lib/share.ts). Snapshot is re-uploaded on sync when stale. */
   share?: ProjectShare
 }

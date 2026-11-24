@@ -17,6 +17,7 @@ import { shareUrl, defaultOgTitle } from '../lib/share'
 import { hasMultiPayer, transferKey, type PersonResult, type Transfer } from '../lib/split'
 import { CATEGORIES, categoryOf, emojiOptions, type CategoryMeta } from '../lib/category'
 import ImportSheet, { type ImportResult } from '../components/ImportSheet'
+import Calculator from '../components/Calculator'
 import { PersonEditor } from './SettingsPage'
 
 function modesFor(cat: CategoryMeta): { value: SplitMode; label: string; emoji: string; desc: string }[] {
@@ -47,6 +48,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
   const [assignBusy, setAssignBusy] = useState(false)
   const ai = useAiAvailable()
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [calcOpen, setCalcOpen] = useState(false)
 
   const result = useMemo(() => (project ? computeSplit(project, data.baseCurrency) : null), [project, data.baseCurrency])
 
@@ -111,6 +113,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
         pp.extras.push({ id: uid(), name: e.name, emoji: e.amount < 0 ? '🏷️' : /外送|運費|delivery/i.test(e.name) ? '🛵' : '🧂', type: 'fixed', value: e.amount, split: 'proportional' })
       }
       if (r.date && !pp.items.length) pp.date = r.date
+      if (r.total != null && r.total > 0) pp.receiptTotal = r.total
       if (pp.mode === 'equal' && pp.items.length > r.rows.length) {
         // remove the placeholder "總額" item if it is still zero
         pp.items = pp.items.filter((it) => !(it.name === '總額' && it.price === 0))
@@ -281,6 +284,7 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
               </button>
             </div>
             {result.unassigned.length > 0 && <p className="small danger-text">⚠️ 有 {result.unassigned.length} 項還沒指定給誰，先不算進總額。</p>}
+            <Reconcile p={p} grandTotal={result.grandTotal} itemsTotal={result.itemsTotal} set={set} />
           </section>
 
           {/* Extras */}
@@ -330,6 +334,25 @@ export default function ProjectPage({ id, tab }: { id: string; tab: 'items' | 'r
           </button>
         </div>
       )}
+
+      <button type="button" className={`calc-fab ${tab === 'items' ? 'calc-fab--above-bar' : ''}`} onClick={() => setCalcOpen(true)} aria-label="小算盤">
+        🧮
+      </button>
+      <Calculator
+        open={calcOpen}
+        onClose={() => setCalcOpen(false)}
+        ctx={{
+          currency: p.currency,
+          base,
+          rate: p.rate,
+          chips: [
+            { label: '總計', value: result.grandTotalRounded },
+            { label: '品項合計', value: Math.round(result.itemsTotal * 100) / 100 },
+            { label: '每人平均', value: p.people.length ? Math.round((result.grandTotal / p.people.length) * 100) / 100 : 0 },
+            { label: '人數', value: p.people.length },
+          ].filter((c) => c.value > 0),
+        }}
+      />
 
       {/* Sheets */}
       <Sheet open={emojiOpen} onClose={() => setEmojiOpen(false)} title="換個圖示">
@@ -534,6 +557,7 @@ function RateRow({ p, base, set }: { p: Project; base: string; set: (fn: (p: Pro
         <MoneyInput
           value={p.rate ?? 0}
           placeholder="匯率"
+          label="匯率"
           onChange={(n) =>
             set((pp) => {
               pp.rate = n || null
@@ -590,7 +614,7 @@ function ItemRow({ item, p, set }: { item: Item; p: Project; set: (fn: (p: Proje
         {p.mode !== 'equal' && (
           <input className="input input--qty" inputMode="numeric" value={item.qty} title="數量" onChange={(e) => patch((it) => (it.qty = Math.max(1, Number(e.target.value) || 1)))} />
         )}
-        <MoneyInput value={item.price} onChange={(n) => patch((it) => (it.price = n))} autoFocus={!item.name && !item.price} />
+        <MoneyInput value={item.price} onChange={(n) => patch((it) => (it.price = n))} autoFocus={!item.name && !item.price} label={item.name || '品項金額'} />
         <button type="button" className="icon-btn icon-btn--sm" onClick={remove} aria-label="刪除">
           ✕
         </button>
@@ -629,6 +653,50 @@ function ItemRow({ item, p, set }: { item: Item; p: Project; set: (fn: (p: Proje
   )
 }
 
+/* ---------------- Reconcile against receipt ---------------- */
+
+function Reconcile({ p, grandTotal, itemsTotal, set }: { p: Project; grandTotal: number; itemsTotal: number; set: (fn: (p: Project) => void) => void }) {
+  const [editing, setEditing] = useState(false)
+  const has = p.receiptTotal != null
+  if (!has && !editing) {
+    return (
+      <div className="reconcile reconcile--idle">
+        <span className="muted small">品項合計 {fmtMoney(itemsTotal, p.currency, { compact: true })}</span>
+        <button type="button" className="link small" onClick={() => setEditing(true)}>
+          填收據總計來核對
+        </button>
+      </div>
+    )
+  }
+  const diff = Math.round((grandTotal - (p.receiptTotal ?? 0)) * 100) / 100
+  const ok = has && Math.abs(diff) < 0.5
+  return (
+    <div className={`reconcile ${has ? (ok ? 'is-ok' : 'is-warn') : ''}`}>
+      <div className="reconcile__row">
+        <span className="small strong">收據總計</span>
+        <MoneyInput
+          value={p.receiptTotal ?? 0}
+          label="收據總計"
+          autoFocus={!has}
+          onChange={(n) => set((pp) => (pp.receiptTotal = n || undefined))}
+        />
+        <button type="button" className="icon-btn icon-btn--sm" aria-label="移除" onClick={() => { set((pp) => (pp.receiptTotal = undefined)); setEditing(false) }}>
+          ✕
+        </button>
+      </div>
+      {has && (
+        <div className="reconcile__msg small">
+          {ok
+            ? `✓ 跟你輸入的總計 ${fmtMoney(grandTotal, p.currency, { compact: true })} 一致`
+            : diff > 0
+              ? `⚠️ 你輸入的比收據多 ${fmtMoney(diff, p.currency, { compact: true })}，可能重複輸入或少了折扣`
+              : `⚠️ 你輸入的比收據少 ${fmtMoney(-diff, p.currency, { compact: true })}，可能漏了品項或服務費`}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ---------------- Extra row ---------------- */
 
 function ExtraRow({ extra, p, set }: { extra: Extra; p: Project; set: (fn: (p: Project) => void) => void }) {
@@ -645,7 +713,7 @@ function ExtraRow({ extra, p, set }: { extra: Extra; p: Project; set: (fn: (p: P
         <button type="button" className="chip chip--xs" onClick={() => patch((x) => (x.type = x.type === 'percent' ? 'fixed' : 'percent'))} title="切換 % / 金額">
           {extra.type === 'percent' ? '%' : currencyMeta(p.currency).code}
         </button>
-        <MoneyInput value={extra.value} onChange={(n) => patch((x) => (x.value = n))} />
+        <MoneyInput value={extra.value} onChange={(n) => patch((x) => (x.value = n))} label={extra.name} />
         <button type="button" className="icon-btn icon-btn--sm" onClick={() => set((pp) => (pp.extras = pp.extras.filter((x) => x.id !== extra.id)))} aria-label="刪除">
           ✕
         </button>
