@@ -84,6 +84,14 @@ describe('pages render without crashing', () => {
       dispatchEvent(new HashChangeEvent('hashchange'))
     })
     expect(await screen.findByText('💸 誰轉給誰')).toBeTruthy()
+
+    location.hash = '/stats'
+    await act(async () => {
+      dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(await screen.findByText('📊 統計')).toBeTruthy()
+    expect(await screen.findByText('花在哪裡')).toBeTruthy()
+    expect(screen.getByText('誰欠最多')).toBeTruthy()
   })
 
   it('project without payments (single payer) shows settle buttons', async () => {

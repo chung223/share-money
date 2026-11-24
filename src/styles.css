@@ -1866,3 +1866,146 @@ button.hero-stat {
 .trip-card {
   border: 2px dashed var(--c-lavender);
 }
+
+/* ---------- 📊 統計 ---------- */
+.stats-month {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.stats-month__label {
+  font-weight: 900;
+  font-size: 18px;
+  text-align: center;
+  flex: 1;
+}
+.stats-month .icon-btn:disabled {
+  opacity: 0.35;
+}
+.stats-grow {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.stats-pie {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.stats-donut {
+  width: 150px;
+  height: 150px;
+  flex: none;
+}
+.stats-donut__bg {
+  fill: none;
+  stroke: var(--surface-2);
+  stroke-width: 20;
+}
+.stats-donut__slice {
+  fill: none;
+  stroke-width: 20;
+  transform: rotate(-90deg);
+  transform-origin: 60px 60px;
+  transition: stroke-dasharray 0.4s ease;
+}
+.stats-donut__num {
+  fill: var(--text);
+  font-size: 22px;
+  font-weight: 900;
+}
+.stats-donut__cap {
+  fill: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+}
+.stats-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.stats-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.stats-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+}
+.stats-legend__name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.stats-legend__val {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  flex: none;
+}
+.stats-rank {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.stats-rank li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.stats-rank__no {
+  width: 18px;
+  flex: none;
+  text-align: center;
+  font-weight: 900;
+  color: var(--muted);
+}
+.stats-rank__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stats-rank__top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+.stats-rank__name {
+  min-width: 0;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.stats-rank__val {
+  flex: none;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+.stats-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.stats-bar__fill {
+  height: 100%;
+  border-radius: 999px;
+}
