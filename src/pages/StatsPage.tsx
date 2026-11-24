@@ -105,7 +105,7 @@ export default function StatsPage() {
         <main className="stack">
           <div className="card card--pink hero-stat">
             <div className="stats-grow">
-              <div className="hero-stat__label">這個月幫大家代墊</div>
+              <div className="hero-stat__label">幫大家代墊</div>
               <div className="hero-stat__value">{fmtMoney(st.total, base)}</div>
               <div className="small">
                 {st.projectCount} 本帳 · {st.remaining > 0 ? `還沒收 ${fmtMoney(st.remaining, base)}` : '都收回來了'}
